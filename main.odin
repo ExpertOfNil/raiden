@@ -27,6 +27,8 @@ Renderer :: struct {
 	vertex_buffer:   wgpu.Buffer,
 	uniform_buffer:  wgpu.Buffer,
 	bind_group:      wgpu.BindGroup,
+	depth_texture:   wgpu.Texture,
+	depth_view:      wgpu.TextureView,
 }
 
 WindowSystemGlfw :: struct {
@@ -36,8 +38,9 @@ WindowSystemGlfw :: struct {
 }
 
 Camera :: struct {
-	view_matrix: Mat4,
-	proj_matrix: Mat4,
+	view_matrix:  Mat4,
+	proj_matrix:  Mat4,
+	model_matrix: Mat4,
 }
 
 Vertex :: struct {
@@ -50,12 +53,37 @@ Uniforms :: struct {
 }
 
 vertices := []Vertex {
-	{{1.0, 1.0, -10.0}, {1.0, 0.0, 0.0}},
-	{{-1.0, 1.0, -10.0}, {0.0, 0.0, 1.0}},
-	{{-1.0, -1.0, -10.0}, {0.0, 0.0, 1.0}},
-	{{1.0, 1.0, -10.0}, {1.0, 0.0, 0.0}},
-	{{-1.0, -1.0, -10.0}, {0.0, 0.0, 1.0}},
-	{{1.0, -1.0, -10.0}, {1.0, 0.0, 0.0}},
+	// Front
+	{{1.0, 1.0, 1.0}, {1.0, 0.0, 0.0}},
+	{{-1.0, 1.0, 1.0}, {0.0, 0.0, 1.0}},
+	{{-1.0, -1.0, 1.0}, {0.0, 0.0, 1.0}},
+	{{1.0, 1.0, 1.0}, {1.0, 0.0, 0.0}},
+	{{-1.0, -1.0, 1.0}, {0.0, 0.0, 1.0}},
+	{{1.0, -1.0, 1.0}, {1.0, 0.0, 0.0}},
+
+	// Back
+	{{1.0, 1.0, -1.0}, {1.0, 0.0, 0.0}},
+	{{-1.0, -1.0, -1.0}, {0.0, 0.0, 1.0}},
+	{{-1.0, 1.0, -1.0}, {0.0, 0.0, 1.0}},
+	{{1.0, 1.0, -1.0}, {1.0, 0.0, 0.0}},
+	{{1.0, -1.0, -1.0}, {1.0, 0.0, 0.0}},
+	{{-1.0, -1.0, -1.0}, {0.0, 0.0, 1.0}},
+
+	// Left
+	{{-1.0, 1.0, -1.0}, {0.0, 0.0, 1.0}},
+	{{-1.0, -1.0, -1.0}, {0.0, 0.0, 1.0}},
+	{{-1.0, 1.0, 1.0}, {0.0, 0.0, 1.0}},
+	{{-1.0, 1.0, 1.0}, {0.0, 0.0, 1.0}},
+	{{-1.0, -1.0, -1.0}, {0.0, 0.0, 1.0}},
+	{{-1.0, -1.0, 1.0}, {0.0, 0.0, 1.0}},
+
+	// Right
+	{{1.0, 1.0, 1.0}, {1.0, 0.0, 0.0}},
+	{{1.0, -1.0, 1.0}, {1.0, 0.0, 0.0}},
+	{{1.0, -1.0, -1.0}, {1.0, 0.0, 0.0}},
+	{{1.0, 1.0, 1.0}, {1.0, 0.0, 0.0}},
+	{{1.0, -1.0, -1.0}, {1.0, 0.0, 0.0}},
+	{{1.0, 1.0, -1.0}, {1.0, 0.0, 0.0}},
 }
 
 WgpuCallbackContext :: struct {
@@ -116,19 +144,20 @@ engine_init :: proc(engine: ^Engine) -> bool {
 		return false
 	}
 
-	update_matrices(engine)
+	init_matrices(engine)
 
 	return true
 }
 
 framebuffer_size_callback :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
+	context = {}
 	engine := cast(^Engine)glfw.GetWindowUserPointer(window)
 	engine.window_size.x = u32(width)
 	engine.window_size.y = u32(height)
 	engine.renderer.surface_config.width = engine.window_size.x
 	engine.renderer.surface_config.height = engine.window_size.y
 	wgpu.SurfaceConfigure(engine.renderer.surface, &engine.renderer.surface_config)
-	context = {}
+	init_depth_texture(&engine.renderer, engine.window_size)
 	update_matrices(engine)
 }
 
@@ -219,6 +248,11 @@ engine_init_wgpu :: proc(
 	}
 	wgpu.SurfaceConfigure(renderer.surface, &renderer.surface_config)
 
+	if !init_depth_texture(renderer, window_size) {
+		fmt.eprintln("Failed to create depth texture")
+		return false
+	}
+
 	return true
 }
 
@@ -266,7 +300,48 @@ device_request_callback :: proc "c" (
 	}
 }
 
-update_matrices :: proc(engine: ^Engine) {
+init_depth_texture :: proc(renderer: ^Renderer, window_size: [2]u32) -> bool {
+	if renderer.depth_view != nil {
+		wgpu.TextureViewRelease(renderer.depth_view)
+	}
+	if renderer.depth_texture != nil {
+		wgpu.TextureRelease(renderer.depth_texture)
+	}
+
+	depth_texture_desc := wgpu.TextureDescriptor {
+		label = "Depth Texture",
+		size = {width = window_size.x, height = window_size.y, depthOrArrayLayers = 1},
+		mipLevelCount = 1,
+		sampleCount = 1,
+		dimension = wgpu.TextureDimension._2D,
+		format = wgpu.TextureFormat.Depth24Plus,
+		usage = wgpu.TextureUsageFlags{.RenderAttachment},
+	}
+	renderer.depth_texture = wgpu.DeviceCreateTexture(renderer.device, &depth_texture_desc)
+	if renderer.depth_texture == nil {
+		fmt.eprintln("Failed to crate depth texture")
+		return false
+	}
+
+	depth_view_desc := wgpu.TextureViewDescriptor {
+		label           = "Depth View",
+		format          = wgpu.TextureFormat.Depth24Plus,
+		dimension       = wgpu.TextureViewDimension._2D,
+		baseMipLevel    = 0,
+		mipLevelCount   = 1,
+		baseArrayLayer  = 0,
+		arrayLayerCount = 1,
+	}
+	renderer.depth_view = wgpu.TextureCreateView(renderer.depth_texture, &depth_view_desc)
+	if renderer.depth_view == nil {
+		fmt.eprintln("Failed to crate depth view")
+		return false
+	}
+
+	return true
+}
+
+init_matrices :: proc(engine: ^Engine) {
 	aspect := f32(engine.window_size.x) / f32(engine.window_size.y)
 
 	engine.camera.proj_matrix = linalg.matrix4_perspective_f32(
@@ -275,14 +350,33 @@ update_matrices :: proc(engine: ^Engine) {
 		0.1,
 		100.0,
 	)
-	fmt.println("Proj Matrix: %v", engine.camera.proj_matrix)
 	engine.camera.view_matrix = Mat4(1)
-	fmt.println("View Matrix: %v", engine.camera.view_matrix)
-
+    // odinfmt: disable
+	engine.camera.model_matrix = Mat4 {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, -10,
+        0, 0, 0, 1,
+    }
+    // odinfmt: enable
+	camera := &engine.camera
 	uniforms := Uniforms {
-		view_proj = engine.camera.proj_matrix * engine.camera.view_matrix,
+		view_proj = camera.proj_matrix * camera.view_matrix * camera.model_matrix,
 	}
-	fmt.println("View-Proj Matrix: %v", uniforms.view_proj)
+	wgpu.QueueWriteBuffer(
+		engine.renderer.queue,
+		engine.renderer.uniform_buffer,
+		0,
+		&uniforms,
+		size_of(Uniforms),
+	)
+}
+
+update_matrices :: proc(engine: ^Engine) {
+	camera := &engine.camera
+	uniforms := Uniforms {
+		view_proj = camera.proj_matrix * camera.view_matrix * camera.model_matrix,
+	}
 	wgpu.QueueWriteBuffer(
 		engine.renderer.queue,
 		engine.renderer.uniform_buffer,
@@ -381,6 +475,11 @@ engine_init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 				writeMask = wgpu.ColorWriteMaskFlags_All,
 			},
 		},
+		depthStencil = &wgpu.DepthStencilState {
+			format = wgpu.TextureFormat.Depth24Plus,
+			depthWriteEnabled = wgpu.OptionalBool.True,
+			depthCompare = wgpu.CompareFunction.Less,
+		},
 		primitive = {
 			topology = wgpu.PrimitiveTopology.TriangleList,
 			stripIndexFormat = wgpu.IndexFormat.Undefined,
@@ -478,14 +577,20 @@ render :: proc(renderer: ^Renderer) {
 	defer wgpu.CommandEncoderRelease(command_encoder)
 
 	render_pass_desc := wgpu.RenderPassDescriptor {
-		label                = "Render Pass",
-		colorAttachmentCount = 1,
-		colorAttachments     = &wgpu.RenderPassColorAttachment {
+		label                  = "Render Pass",
+		colorAttachmentCount   = 1,
+		colorAttachments       = &wgpu.RenderPassColorAttachment {
 			view = view,
 			loadOp = .Clear,
 			storeOp = .Store,
 			depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
 			clearValue = {0.1, 0.1, 0.1, 1.0},
+		},
+		depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment {
+			view = renderer.depth_view,
+			depthLoadOp = .Clear,
+			depthStoreOp = .Store,
+			depthClearValue = 1.0,
 		},
 	}
 	render_pass := wgpu.CommandEncoderBeginRenderPass(command_encoder, &render_pass_desc)
@@ -516,12 +621,42 @@ cleanup :: proc(engine: ^Engine) {
 	if engine.renderer.vertex_buffer != nil do wgpu.BufferDestroy(engine.renderer.vertex_buffer)
 	if engine.renderer.uniform_buffer != nil do wgpu.BufferDestroy(engine.renderer.uniform_buffer)
 	if engine.renderer.render_pipeline != nil do wgpu.RenderPipelineRelease(engine.renderer.render_pipeline)
+	if engine.renderer.depth_view != nil do wgpu.TextureViewRelease(engine.renderer.depth_view)
+	if engine.renderer.depth_texture != nil do wgpu.TextureRelease(engine.renderer.depth_texture)
 	if engine.renderer.device != nil do wgpu.DeviceRelease(engine.renderer.device)
 	if engine.renderer.adapter != nil do wgpu.AdapterRelease(engine.renderer.adapter)
 	if engine.renderer.surface != nil do wgpu.SurfaceRelease(engine.renderer.surface)
 
 	if engine.window != nil do glfw.DestroyWindow(engine.window)
 	glfw.Terminate()
+}
+
+mouse_move_callback :: proc "c" (window: glfw.WindowHandle, xpos, ypos: f64) {
+	context = {}
+	state := cast(^MouseState)glfw.GetWindowUserPointer(window)
+	if state.rotating {
+		delta := xpos - state.pos.x
+		state.angle += f32(delta) * 0.01
+	}
+	state.pos.x = xpos
+	state.pos.y = ypos
+}
+
+mouse_button_callback :: proc "c" (window: glfw.WindowHandle, button, action, mods: i32) {
+	context = {}
+	state := cast(^MouseState)glfw.GetWindowUserPointer(window)
+	if button == glfw.MOUSE_BUTTON_LEFT && action == glfw.PRESS {
+		state.rotating = true
+		state.pos.x, state.pos.y = glfw.GetCursorPos(window)
+	} else {
+		state.rotating = false
+	}
+}
+
+MouseState :: struct {
+	rotating: bool,
+	angle:    f32,
+	pos:      [2]f64,
 }
 
 main :: proc() {
@@ -533,8 +668,19 @@ main :: proc() {
 	}
 	defer cleanup(&engine)
 
+	mouse_state := MouseState{}
+	glfw.SetWindowUserPointer(engine.window, &mouse_state)
+	glfw.SetCursorPosCallback(engine.window, mouse_move_callback)
+	glfw.SetMouseButtonCallback(engine.window, mouse_button_callback)
+	glfw.SetInputMode(engine.window, glfw.STICKY_MOUSE_BUTTONS, 1)
 	for !glfw.WindowShouldClose(engine.window) {
 		glfw.PollEvents()
+		if mouse_state.rotating {
+			rot := linalg.matrix4_rotate_f32(mouse_state.angle, {0, 1, 0})
+			pos := linalg.matrix4_translate_f32({0, 0, -10})
+			engine.camera.model_matrix = pos * rot
+			update_matrices(&engine)
+		}
 		render(&engine.renderer)
 	}
 }
