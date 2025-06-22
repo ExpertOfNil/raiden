@@ -153,8 +153,10 @@ mouse_move_callback :: proc "c" (window: glfw.WindowHandle, xpos, ypos: f64) {
 	context = {}
 	state := cast(^MouseState)glfw.GetWindowUserPointer(window)
 	if state.rotating {
-		delta := xpos - state.pos.x
-		state.angle += f32(delta) * 0.01
+		delta_x := xpos - state.pos.x
+		state.angle_yaw += f32(delta_x) * 0.01
+		delta_y := ypos - state.pos.y
+		state.angle_pitch += f32(delta_y) * 0.01
 	}
 	state.pos.x = xpos
 	state.pos.y = ypos
@@ -172,9 +174,10 @@ mouse_button_callback :: proc "c" (window: glfw.WindowHandle, button, action, mo
 }
 
 MouseState :: struct {
-	rotating: bool,
-	angle:    f32,
-	pos:      [2]f64,
+	rotating:    bool,
+	angle_pitch: f32,
+	angle_yaw:   f32,
+	pos:         [2]f64,
 }
 
 main :: proc() {
@@ -194,9 +197,10 @@ main :: proc() {
 	for !glfw.WindowShouldClose(engine.window) {
 		glfw.PollEvents()
 		if mouse_state.rotating {
-			rot := linalg.matrix4_rotate_f32(mouse_state.angle, {0, 1, 0})
+			rot_pitch := linalg.matrix4_rotate_f32(mouse_state.angle_pitch, {1, 0, 0})
+			rot_yaw := linalg.matrix4_rotate_f32(mouse_state.angle_yaw, {0, 1, 0})
 			pos := linalg.matrix4_translate_f32({0, 0, -10})
-			engine.camera.model_matrix = pos * rot
+			engine.camera.model_matrix = pos * rot_yaw * rot_pitch
 			update_matrices(&engine)
 		}
 		raiden.render(&engine.renderer)
