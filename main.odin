@@ -152,11 +152,18 @@ cleanup :: proc(engine: ^Engine) {
 mouse_move_callback :: proc "c" (window: glfw.WindowHandle, xpos, ypos: f64) {
 	context = {}
 	state := cast(^MouseState)glfw.GetWindowUserPointer(window)
-	if state.rotating {
+	if state.is_rotating {
 		delta_x := xpos - state.pos.x
 		state.angle_yaw += f32(delta_x) * 0.01
 		delta_y := ypos - state.pos.y
 		state.angle_pitch += f32(delta_y) * 0.01
+
+		delta_pitch := linalg.quaternion_angle_axis_f32(f32(delta_y) * 0.01, {1, 0, 0})
+		delta_yaw := linalg.quaternion_angle_axis_f32(f32(delta_x) * 0.01, {0, 1, 0})
+
+		state.rotation = linalg.quaternion_mul_quaternion(delta_yaw, state.rotation)
+		state.rotation = linalg.quaternion_mul_quaternion(delta_pitch, state.rotation)
+		state.rotation = linalg.quaternion_normalize(state.rotation)
 	}
 	state.pos.x = xpos
 	state.pos.y = ypos
@@ -166,18 +173,19 @@ mouse_button_callback :: proc "c" (window: glfw.WindowHandle, button, action, mo
 	context = {}
 	state := cast(^MouseState)glfw.GetWindowUserPointer(window)
 	if button == glfw.MOUSE_BUTTON_LEFT && action == glfw.PRESS {
-		state.rotating = true
+		state.is_rotating = true
 		state.pos.x, state.pos.y = glfw.GetCursorPos(window)
 	} else {
-		state.rotating = false
+		state.is_rotating = false
 	}
 }
 
 MouseState :: struct {
-	rotating:    bool,
+	is_rotating: bool,
 	angle_pitch: f32,
 	angle_yaw:   f32,
 	pos:         [2]f64,
+	rotation:    quaternion128,
 }
 
 main :: proc() {
@@ -190,17 +198,17 @@ main :: proc() {
 	defer cleanup(&engine)
 
 	mouse_state := MouseState{}
+	mouse_state.rotation = quaternion128(1)
 	glfw.SetWindowUserPointer(engine.window, &mouse_state)
 	glfw.SetCursorPosCallback(engine.window, mouse_move_callback)
 	glfw.SetMouseButtonCallback(engine.window, mouse_button_callback)
 	glfw.SetInputMode(engine.window, glfw.STICKY_MOUSE_BUTTONS, 1)
 	for !glfw.WindowShouldClose(engine.window) {
 		glfw.PollEvents()
-		if mouse_state.rotating {
-			rot_pitch := linalg.matrix4_rotate_f32(mouse_state.angle_pitch, {1, 0, 0})
-			rot_yaw := linalg.matrix4_rotate_f32(mouse_state.angle_yaw, {0, 1, 0})
+		if mouse_state.is_rotating {
+			rot := linalg.matrix4_from_quaternion_f32(mouse_state.rotation)
 			pos := linalg.matrix4_translate_f32({0, 0, -10})
-			engine.camera.model_matrix = pos * rot_yaw * rot_pitch
+			engine.camera.model_matrix = pos * rot
 			update_matrices(&engine)
 		}
 		raiden.render(&engine.renderer)

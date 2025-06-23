@@ -5,5 +5,6 @@ struct VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(input.color, 1.0);
+    let ambient_color = vec3<f32>(1.0) * 0.3;
+    return vec4<f32>(ambient_color * input.color, 1.0);
 }
