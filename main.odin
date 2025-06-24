@@ -6,14 +6,10 @@ import "core:math/linalg"
 import "core:os"
 import "raiden"
 import "vendor:glfw"
+import "vendor:sdl3"
 import "vendor:wgpu"
 import "vendor:wgpu/glfwglue"
-
-WindowSystemGlfw :: struct {
-	window: glfw.WindowHandle,
-	width:  u32,
-	height: u32,
-}
+import "vendor:wgpu/sdl3glue"
 
 Camera :: struct {
 	view_matrix:  raiden.Mat4,
@@ -23,14 +19,14 @@ Camera :: struct {
 
 Engine :: struct {
 	renderer:    raiden.Renderer,
-	window:      glfw.WindowHandle,
+	window:      ^sdl3.Window,
 	window_size: [2]u32,
 	camera:      Camera,
 }
 
-engine_init :: proc(engine: ^Engine) -> bool {
-	if !glfw.Init() {
-		fmt.eprintln("Failed to initialize GLFW")
+engine_init_sdl3 :: proc(engine: ^Engine) -> bool {
+	if !sdl3.Init({.VIDEO}) {
+		fmt.eprintln("Failed to initialize SDL3")
 		return false
 	}
 
@@ -39,24 +35,20 @@ engine_init :: proc(engine: ^Engine) -> bool {
 
 	engine.window_size.x = 1280
 	engine.window_size.y = 720
-	engine.window = glfw.CreateWindow(
+	engine.window = sdl3.CreateWindow(
+		"Raiden",
 		i32(engine.window_size.x),
 		i32(engine.window_size.y),
-		"Raiden",
-		nil,
-		nil,
+		{.RESIZABLE},
 	)
 
 	if engine.window == nil {
 		fmt.eprintln("Failed to create window")
-		glfw.Terminate()
+		sdl3.Quit()
 		return false
 	}
 
-	glfw.SetWindowUserPointer(engine.window, engine)
-	glfw.SetFramebufferSizeCallback(engine.window, framebuffer_size_callback)
-
-	if !raiden.init_wgpu_glfw(&engine.renderer, engine.window, engine.window_size) {
+	if !raiden.init_wgpu_sdl3(&engine.renderer, engine.window, engine.window_size) {
 		fmt.eprintln("Failed to initialize WGPU")
 		glfw.Terminate()
 		return false
@@ -77,9 +69,7 @@ engine_init :: proc(engine: ^Engine) -> bool {
 	return true
 }
 
-framebuffer_size_callback :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
-	context = {}
-	engine := cast(^Engine)glfw.GetWindowUserPointer(window)
+handle_window_resize :: proc(engine: ^Engine, width, height: i32) {
 	engine.window_size.x = u32(width)
 	engine.window_size.y = u32(height)
 	engine.renderer.surface_config.width = engine.window_size.x
@@ -145,53 +135,22 @@ cleanup :: proc(engine: ^Engine) {
 	if engine.renderer.adapter != nil do wgpu.AdapterRelease(engine.renderer.adapter)
 	if engine.renderer.surface != nil do wgpu.SurfaceRelease(engine.renderer.surface)
 
-	if engine.window != nil do glfw.DestroyWindow(engine.window)
+	if engine.window != nil do sdl3.DestroyWindow(engine.window)
 	glfw.Terminate()
-}
-
-mouse_move_callback :: proc "c" (window: glfw.WindowHandle, xpos, ypos: f64) {
-	context = {}
-	state := cast(^MouseState)glfw.GetWindowUserPointer(window)
-	if state.is_rotating {
-		delta_x := xpos - state.pos.x
-		state.angle_yaw += f32(delta_x) * 0.01
-		delta_y := ypos - state.pos.y
-		state.angle_pitch += f32(delta_y) * 0.01
-
-		delta_pitch := linalg.quaternion_angle_axis_f32(f32(delta_y) * 0.01, {1, 0, 0})
-		delta_yaw := linalg.quaternion_angle_axis_f32(f32(delta_x) * 0.01, {0, 1, 0})
-
-		state.rotation = linalg.quaternion_mul_quaternion(delta_yaw, state.rotation)
-		state.rotation = linalg.quaternion_mul_quaternion(delta_pitch, state.rotation)
-		state.rotation = linalg.quaternion_normalize(state.rotation)
-	}
-	state.pos.x = xpos
-	state.pos.y = ypos
-}
-
-mouse_button_callback :: proc "c" (window: glfw.WindowHandle, button, action, mods: i32) {
-	context = {}
-	state := cast(^MouseState)glfw.GetWindowUserPointer(window)
-	if button == glfw.MOUSE_BUTTON_LEFT && action == glfw.PRESS {
-		state.is_rotating = true
-		state.pos.x, state.pos.y = glfw.GetCursorPos(window)
-	} else {
-		state.is_rotating = false
-	}
 }
 
 MouseState :: struct {
 	is_rotating: bool,
 	angle_pitch: f32,
 	angle_yaw:   f32,
-	pos:         [2]f64,
+	pos:         [2]f32,
 	rotation:    quaternion128,
 }
 
 main :: proc() {
 	engine := Engine{}
 
-	if !engine_init(&engine) {
+	if !engine_init_sdl3(&engine) {
 		fmt.eprintln("Failed to initialize engine")
 		os.exit(1)
 	}
@@ -199,17 +158,61 @@ main :: proc() {
 
 	mouse_state := MouseState{}
 	mouse_state.rotation = quaternion128(1)
-	glfw.SetWindowUserPointer(engine.window, &mouse_state)
-	glfw.SetCursorPosCallback(engine.window, mouse_move_callback)
-	glfw.SetMouseButtonCallback(engine.window, mouse_button_callback)
-	glfw.SetInputMode(engine.window, glfw.STICKY_MOUSE_BUTTONS, 1)
-	for !glfw.WindowShouldClose(engine.window) {
-		glfw.PollEvents()
-		if mouse_state.is_rotating {
-			rot := linalg.matrix4_from_quaternion_f32(mouse_state.rotation)
-			pos := linalg.matrix4_translate_f32({0, 0, -10})
-			engine.camera.model_matrix = pos * rot
-			update_matrices(&engine)
+
+	running := true
+	for running {
+		event: sdl3.Event
+		for sdl3.PollEvent(&event) {
+			#partial switch event.type {
+			case .QUIT:
+				running = false
+			case .WINDOW_RESIZED:
+				window_event := cast(^sdl3.WindowEvent)&event
+				if sdl3.GetWindowFromID(window_event.windowID) == engine.window {
+					handle_window_resize(&engine, window_event.data1, window_event.data2)
+				}
+			case .MOUSE_BUTTON_DOWN:
+				mouse_event := cast(^sdl3.MouseButtonEvent)&event
+				if mouse_event.button == sdl3.BUTTON_LEFT {
+					mouse_state.is_rotating = true
+					mouse_state.pos.x = mouse_event.x
+					mouse_state.pos.y = mouse_event.y
+				}
+			case .MOUSE_BUTTON_UP:
+				mouse_event := cast(^sdl3.MouseButtonEvent)&event
+				if mouse_event.button == sdl3.BUTTON_LEFT {
+					mouse_state.is_rotating = false
+				}
+			case .MOUSE_MOTION:
+				mouse_event := cast(^sdl3.MouseMotionEvent)&event
+				if mouse_state.is_rotating {
+					delta_x := mouse_event.x - mouse_state.pos.x
+					mouse_state.angle_yaw += f32(delta_x) * 0.01
+					delta_y := mouse_event.y - mouse_state.pos.y
+					mouse_state.angle_pitch += f32(delta_y) * 0.01
+
+					delta_pitch := linalg.quaternion_angle_axis_f32(f32(delta_y) * 0.01, {1, 0, 0})
+					delta_yaw := linalg.quaternion_angle_axis_f32(f32(delta_x) * 0.01, {0, 1, 0})
+
+					mouse_state.rotation = linalg.quaternion_mul_quaternion(
+						delta_yaw,
+						mouse_state.rotation,
+					)
+					mouse_state.rotation = linalg.quaternion_mul_quaternion(
+						delta_pitch,
+						mouse_state.rotation,
+					)
+					mouse_state.rotation = linalg.quaternion_normalize(mouse_state.rotation)
+
+					rot := linalg.matrix4_from_quaternion_f32(mouse_state.rotation)
+					pos := linalg.matrix4_translate_f32({0, 0, -10})
+					engine.camera.model_matrix = pos * rot
+					update_matrices(&engine)
+				}
+				mouse_state.pos.x = mouse_event.x
+				mouse_state.pos.y = mouse_event.y
+
+			}
 		}
 		raiden.render(&engine.renderer)
 	}

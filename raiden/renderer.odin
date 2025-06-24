@@ -4,6 +4,8 @@ import "vendor:wgpu"
 import "core:fmt"
 import "vendor:glfw"
 import "vendor:wgpu/glfwglue"
+import "vendor:sdl3"
+import "vendor:wgpu/sdl3glue"
 
 // Shader source
 vert_shader_source :: #load("vert_shader.wgsl", string)
@@ -87,6 +89,101 @@ device_request_callback :: proc "c" (
 		)
 		ctx.success = false
 	}
+}
+
+init_wgpu_sdl3 :: proc(
+	renderer: ^Renderer,
+	window: ^sdl3.Window,
+	window_size: [2]u32,
+) -> bool {
+	instance := wgpu.CreateInstance(nil)
+	if instance == nil {
+		fmt.eprintln("Failed to create WGPU instance")
+		return false
+	}
+
+	renderer.surface = sdl3glue.GetSurface(instance, window)
+	if renderer.surface == nil {
+		fmt.eprintln("Failed to create surface")
+		return false
+	}
+	fmt.println("Surface created:", renderer.surface != nil)
+
+	adapter_options := wgpu.RequestAdapterOptions {
+		compatibleSurface = renderer.surface,
+		powerPreference   = wgpu.PowerPreference.HighPerformance,
+	}
+	wgpu_ctx := WgpuCallbackContext {
+		adapter = &renderer.adapter,
+		device  = &renderer.device,
+	}
+	adapter_callback := wgpu.RequestAdapterCallbackInfo {
+		callback  = adapter_request_callback,
+		userdata1 = &wgpu_ctx,
+	}
+	wgpu.InstanceRequestAdapter(instance, &adapter_options, adapter_callback)
+	for !wgpu_ctx.completed {
+		wgpu.InstanceProcessEvents(instance)
+	}
+
+	if !wgpu_ctx.success {
+		fmt.eprintln("Failed to get adapter")
+		return false
+	}
+	fmt.println("Adapter created:", renderer.adapter != nil)
+
+	surface_caps, status := wgpu.SurfaceGetCapabilities(renderer.surface, renderer.adapter)
+	if status != .Success {
+		fmt.eprintln("Failed to get surface capabilities")
+		return false
+	}
+
+	if surface_caps.formatCount == 0 {
+		fmt.eprintln("No supported surface formats")
+		return false
+	}
+	fmt.println("Surface format count:", surface_caps.formatCount)
+
+	// Reset completion status for device
+	wgpu_ctx.completed = false
+	wgpu_ctx.success = false
+	device_desc := wgpu.DeviceDescriptor {
+		label = "Device",
+	}
+
+	device_callback := wgpu.RequestDeviceCallbackInfo {
+		callback  = device_request_callback,
+		userdata1 = &wgpu_ctx,
+	}
+	wgpu.AdapterRequestDevice(renderer.adapter, &device_desc, device_callback)
+
+	for !wgpu_ctx.completed {
+		wgpu.InstanceProcessEvents(instance)
+	}
+
+	if !wgpu_ctx.completed {
+		fmt.eprintln("Failed to get device")
+		return false
+	}
+	fmt.println("Device created:", renderer.device != nil)
+	renderer.queue = wgpu.DeviceGetQueue(renderer.device)
+
+	renderer.surface_config = wgpu.SurfaceConfiguration {
+		usage       = wgpu.TextureUsageFlags{wgpu.TextureUsage.RenderAttachment},
+		format      = surface_caps.formats[0],
+		width       = window_size.x,
+		height      = window_size.y,
+		presentMode = wgpu.PresentMode.Fifo,
+		device      = renderer.device,
+	}
+	wgpu.SurfaceConfigure(renderer.surface, &renderer.surface_config)
+
+	if !init_depth_texture(renderer, window_size) {
+		fmt.eprintln("Failed to create depth texture")
+		return false
+	}
+
+	return true
 }
 
 init_wgpu_glfw :: proc(
