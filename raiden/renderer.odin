@@ -1,11 +1,13 @@
 package raiden
 
-import "vendor:wgpu"
 import "core:fmt"
 import "vendor:glfw"
-import "vendor:wgpu/glfwglue"
 import "vendor:sdl3"
+import "vendor:wgpu"
+import "vendor:wgpu/glfwglue"
 import "vendor:wgpu/sdl3glue"
+
+DEFAULT_INSTANCE_CAPACITY :: 64
 
 // Shader source
 vert_shader_source :: #load("vert_shader.wgsl", string)
@@ -15,20 +17,24 @@ Vec3 :: [3]f32
 Vec4 :: [4]f32
 Mat3 :: distinct matrix[3, 3]f32
 Mat4 :: distinct matrix[4, 4]f32
+Color :: [4]u32
 
 Renderer :: struct {
-	adapter:         wgpu.Adapter,
-	device:          wgpu.Device,
-	queue:           wgpu.Queue,
-	surface:         wgpu.Surface,
-	surface_config:  wgpu.SurfaceConfiguration,
-	render_pipeline: wgpu.RenderPipeline,
-	vertex_buffer:   wgpu.Buffer,
-	index_buffer:    wgpu.Buffer,
-	uniform_buffer:  wgpu.Buffer,
-	bind_group:      wgpu.BindGroup,
-	depth_texture:   wgpu.Texture,
-	depth_view:      wgpu.TextureView,
+	adapter:           wgpu.Adapter,
+	device:            wgpu.Device,
+	queue:             wgpu.Queue,
+	surface:           wgpu.Surface,
+	surface_config:    wgpu.SurfaceConfiguration,
+	render_pipeline:   wgpu.RenderPipeline,
+	vertex_buffer:     wgpu.Buffer,
+	index_buffer:      wgpu.Buffer,
+	uniform_buffer:    wgpu.Buffer,
+	instance_buffer:   wgpu.Buffer,
+	bind_group:        wgpu.BindGroup,
+	depth_texture:     wgpu.Texture,
+	depth_view:        wgpu.TextureView,
+	commands:          DrawBatch,
+	instance_capacity: u32,
 }
 
 WgpuCallbackContext :: struct {
@@ -45,6 +51,12 @@ Uniforms :: struct {
 Vertex :: struct {
 	position: Vec3,
 	color:    Vec3,
+	normal:   Vec3,
+}
+
+Instance :: struct {
+	model_matrix: Mat4,
+	color:        Vec4,
 }
 
 adapter_request_callback :: proc "c" (
@@ -91,11 +103,7 @@ device_request_callback :: proc "c" (
 	}
 }
 
-init_wgpu_sdl3 :: proc(
-	renderer: ^Renderer,
-	window: ^sdl3.Window,
-	window_size: [2]u32,
-) -> bool {
+init_wgpu_sdl3 :: proc(renderer: ^Renderer, window: ^sdl3.Window, window_size: [2]u32) -> bool {
 	instance := wgpu.CreateInstance(nil)
 	if instance == nil {
 		fmt.eprintln("Failed to create WGPU instance")
@@ -282,6 +290,10 @@ init_wgpu_glfw :: proc(
 }
 
 init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
+	if !init_commands(renderer) {
+		fmt.eprintln("Failed to initialize commands")
+		return false
+	}
 	vert_shader_desc := wgpu.ShaderModuleDescriptor {
 		label       = "Vertex Shader",
 		nextInChain = &wgpu.ShaderSourceWGSL{sType = .ShaderSourceWGSL, code = vert_shader_source},
@@ -330,14 +342,31 @@ init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 
 	vertex_attributes := []wgpu.VertexAttribute {
 		{format = wgpu.VertexFormat.Float32x3, offset = 0, shaderLocation = 0},
-		{format = wgpu.VertexFormat.Float32x3, offset = size_of([3]f32), shaderLocation = 1},
+		{format = wgpu.VertexFormat.Float32x3, offset = 1 * size_of([3]f32), shaderLocation = 1},
+		{format = wgpu.VertexFormat.Float32x3, offset = 2 * size_of([3]f32), shaderLocation = 2},
 	}
 
-	vertex_buffer_layout := wgpu.VertexBufferLayout {
-		arrayStride    = size_of(Vertex),
-		stepMode       = wgpu.VertexStepMode.Vertex,
-		attributeCount = len(vertex_attributes),
-		attributes     = raw_data(vertex_attributes),
+	instance_attributes := []wgpu.VertexAttribute {
+		{format = wgpu.VertexFormat.Float32x4, offset = 0, shaderLocation = 3},
+		{format = wgpu.VertexFormat.Float32x4, offset = 1 * size_of([4]f32), shaderLocation = 4},
+		{format = wgpu.VertexFormat.Float32x4, offset = 2 * size_of([4]f32), shaderLocation = 5},
+		{format = wgpu.VertexFormat.Float32x4, offset = 3 * size_of([4]f32), shaderLocation = 6},
+		{format = wgpu.VertexFormat.Float32x4, offset = 4 * size_of([4]f32), shaderLocation = 7},
+	}
+
+	vertex_buffer_layouts := []wgpu.VertexBufferLayout {
+		{
+			arrayStride = size_of(Vertex),
+			stepMode = wgpu.VertexStepMode.Vertex,
+			attributeCount = len(vertex_attributes),
+			attributes = raw_data(vertex_attributes),
+		},
+		{
+			arrayStride = size_of(Instance),
+			stepMode = wgpu.VertexStepMode.Instance,
+			attributeCount = len(instance_attributes),
+			attributes = raw_data(instance_attributes),
+		},
 	}
 
 	pipeline_desc := wgpu.RenderPipelineDescriptor {
@@ -346,8 +375,8 @@ init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 		vertex = {
 			module = vert_shader,
 			entryPoint = "vs_main",
-			bufferCount = 1,
-			buffers = &vertex_buffer_layout,
+			bufferCount = len(vertex_buffer_layouts),
+			buffers = raw_data(vertex_buffer_layouts),
 		},
 		fragment = &wgpu.FragmentState {
 			module = frag_shader,
@@ -413,6 +442,20 @@ init_buffers :: proc(renderer: ^Renderer) -> bool {
 		raw_data(CUBE_VERTICES),
 		vertices_size,
 	)
+
+	// Create instance buffer
+	renderer.instance_capacity = DEFAULT_INSTANCE_CAPACITY
+	instances_size := uint(renderer.instance_capacity * size_of(Instance))
+	instance_buffer_desc := wgpu.BufferDescriptor {
+		label            = "Instance Buffer",
+		size             = u64(instances_size),
+		usage            = wgpu.BufferUsageFlags {
+			wgpu.BufferUsage.Vertex,
+			wgpu.BufferUsage.CopyDst,
+		},
+		mappedAtCreation = false,
+	}
+	renderer.instance_buffer = wgpu.DeviceCreateBuffer(renderer.device, &instance_buffer_desc)
 
 	// Create index buffer
 	indices_size := uint(len(CUBE_INDICES) * size_of(u16))
@@ -503,7 +546,40 @@ init_depth_texture :: proc(renderer: ^Renderer, window_size: [2]u32) -> bool {
 	return true
 }
 
+init_commands :: proc(renderer: ^Renderer) -> bool {
+	renderer.commands = make(DrawBatch)
+	return true
+}
+
+renderer_cleanup :: proc(renderer: ^Renderer) {
+	using renderer
+	if vertex_buffer != nil do wgpu.BufferDestroy(vertex_buffer)
+	if index_buffer != nil do wgpu.BufferDestroy(index_buffer)
+	if uniform_buffer != nil do wgpu.BufferDestroy(uniform_buffer)
+	if instance_buffer != nil do wgpu.BufferDestroy(instance_buffer)
+	if render_pipeline != nil do wgpu.RenderPipelineRelease(render_pipeline)
+	if depth_view != nil do wgpu.TextureViewRelease(depth_view)
+	if depth_texture != nil do wgpu.TextureRelease(depth_texture)
+	if device != nil do wgpu.DeviceRelease(device)
+	if adapter != nil do wgpu.AdapterRelease(adapter)
+	if surface != nil do wgpu.SurfaceRelease(surface)
+	if commands != nil do delete(commands)
+}
+
 render :: proc(renderer: ^Renderer) {
+	instance_count := uint(len(renderer.commands))
+	instances := make([dynamic]Instance, instance_count)
+	for i in 0 ..< instance_count {
+		instances[i] = renderer.commands[i].instance
+	}
+	wgpu.QueueWriteBuffer(
+		renderer.queue,
+		renderer.instance_buffer,
+		0,
+		raw_data(instances),
+		instance_count * size_of(Instance),
+	)
+
 	surface_texture := wgpu.SurfaceGetCurrentTexture(renderer.surface)
 	if surface_texture.status != wgpu.SurfaceGetCurrentTextureStatus.SuccessOptimal {
 		fmt.println("Surface texture status:", surface_texture.status)
@@ -560,6 +636,13 @@ render :: proc(renderer: ^Renderer) {
 		0,
 		u64(len(CUBE_VERTICES) * size_of(Vertex)),
 	)
+	wgpu.RenderPassEncoderSetVertexBuffer(
+		render_pass,
+		1,
+		renderer.instance_buffer,
+		0,
+		u64(instance_count * size_of(Instance)),
+	)
 	wgpu.RenderPassEncoderSetIndexBuffer(
 		render_pass,
 		renderer.index_buffer,
@@ -568,8 +651,14 @@ render :: proc(renderer: ^Renderer) {
 		u64(len(CUBE_INDICES) * size_of(u16)),
 	)
 
-	wgpu.RenderPassEncoderDrawIndexed(render_pass, u32(len(CUBE_INDICES)), 1, 0, 0, 0)
-	//wgpu.RenderPassEncoderDraw(render_pass, u32(len(vertices)), 1, 0, 0)
+	wgpu.RenderPassEncoderDrawIndexed(
+		render_pass,
+		u32(len(CUBE_INDICES)),
+		u32(instance_count),
+		0,
+		0,
+		0,
+	)
 	wgpu.RenderPassEncoderEnd(render_pass)
 
 	command_buffer_desc := wgpu.CommandBufferDescriptor {
@@ -580,4 +669,5 @@ render :: proc(renderer: ^Renderer) {
 
 	wgpu.QueueSubmit(renderer.queue, {command_buffer})
 	wgpu.SurfacePresent(renderer.surface)
+	clear(&renderer.commands)
 }

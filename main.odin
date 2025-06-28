@@ -85,16 +85,8 @@ init_matrices :: proc(engine: ^Engine) {
 		100.0,
 	)
 	view_matrix.data = raiden.Mat4(1)
-    // odinfmt: disable
-	model_matrix.data = raiden.Mat4 {
-        1, 0, 0, 0,
-        0, 1, 0, 0,
-        0, 0, 1, -10,
-        0, 0, 0, 1,
-    }
-    // odinfmt: enable
 	uniforms := raiden.Uniforms {
-		view_proj = proj_matrix.data * view_matrix.data * model_matrix.data,
+		view_proj = proj_matrix.data * view_matrix.data,
 	}
 	wgpu.QueueWriteBuffer(
 		engine.renderer.queue,
@@ -108,7 +100,7 @@ init_matrices :: proc(engine: ^Engine) {
 update_matrices :: proc(engine: ^Engine) {
 	using engine.camera
 	uniforms := raiden.Uniforms {
-		view_proj = proj_matrix.data * view_matrix.data * model_matrix.data,
+		view_proj = proj_matrix.data * view_matrix.data,
 	}
 	wgpu.QueueWriteBuffer(
 		engine.renderer.queue,
@@ -120,16 +112,7 @@ update_matrices :: proc(engine: ^Engine) {
 }
 
 cleanup :: proc(engine: ^Engine) {
-    using engine.renderer
-	if vertex_buffer != nil do wgpu.BufferDestroy(vertex_buffer)
-	if index_buffer != nil do wgpu.BufferDestroy(index_buffer)
-	if uniform_buffer != nil do wgpu.BufferDestroy(uniform_buffer)
-	if render_pipeline != nil do wgpu.RenderPipelineRelease(render_pipeline)
-	if depth_view != nil do wgpu.TextureViewRelease(depth_view)
-	if depth_texture != nil do wgpu.TextureRelease(depth_texture)
-	if device != nil do wgpu.DeviceRelease(device)
-	if adapter != nil do wgpu.AdapterRelease(adapter)
-	if surface != nil do wgpu.SurfaceRelease(surface)
+	raiden.renderer_cleanup(&engine.renderer)
 
 	if engine.window != nil do sdl3.DestroyWindow(engine.window)
 	glfw.Terminate()
@@ -217,8 +200,17 @@ main :: proc() {
 					mouse_state.rotation = linalg.quaternion_normalize(mouse_state.rotation)
 
 					rot := linalg.matrix4_from_quaternion_f32(mouse_state.rotation)
-					pos := linalg.matrix4_translate_f32({0, 0, -10})
-					engine.camera.model_matrix.data = pos * rot
+					for &cmd in engine.renderer.commands {
+						pos := linalg.matrix4_translate_f32(
+							{
+								cmd.instance.model_matrix[0, 3],
+								cmd.instance.model_matrix[1, 3],
+								cmd.instance.model_matrix[2, 3],
+							},
+						)
+						cmd.instance.model_matrix = pos * rot
+						fmt.println("Model Matrix: ", cmd.instance.model_matrix)
+					}
 					update_matrices(&engine)
 				}
 				if mouse_state.is_translating {
@@ -235,6 +227,10 @@ main :: proc() {
 
 			}
 		}
+		raiden.draw_cube(&engine.renderer, {255, 0, 255, 255}, {2, 2, -10})
+		raiden.draw_cube(&engine.renderer, {255, 255, 255, 255}, {-2, -2, -10})
+		raiden.draw_cube(&engine.renderer, {255, 0, 0, 255}, {2, 0, -10})
+		raiden.draw_cube(&engine.renderer, {0, 255, 0, 255}, {0, 2, -10})
 		raiden.render(&engine.renderer)
 	}
 }
