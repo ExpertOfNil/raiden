@@ -139,7 +139,8 @@ main :: proc() {
 		button_middle = false,
 	}
 
-	target := raiden.instance_from_position_rotation(raiden.Vec3(0), raiden.Mat3(1))
+	// Make a cube to visualize the camera target location
+	target := raiden.instance_from_position_rotation(raiden.Vec3(0), raiden.Mat3(1), scale = 0.2)
 
 	running := true
 	for running {
@@ -195,12 +196,12 @@ main :: proc() {
 				mouse_state.position.y = mouse_event.y
 			}
 		}
-        update_uniforms(&engine)
-        raiden.instance_set_position(&target, engine.camera.target)
-        raiden.draw_cube_from_instance(&engine.renderer, target)
-		raiden.draw_cube(&engine.renderer, {255, 0, 0, 255}, {2, 0, 0})
-		raiden.draw_cube(&engine.renderer, {0, 255, 0, 255}, {0, 2, 0})
-		raiden.draw_cube(&engine.renderer, {0, 0, 255, 255}, {0, 0, 2})
+		update_uniforms(&engine)
+		raiden.instance_set_position(&target, engine.camera.target)
+		raiden.draw_cube_from_instance(&engine.renderer, target)
+		raiden.draw_cube(&engine.renderer, position = {2, 0, 0}, color = {255, 0, 0, 255})
+		raiden.draw_cube(&engine.renderer, position = {0, 2, 0}, color = {0, 255, 0, 255})
+		raiden.draw_cube(&engine.renderer, position = {0, 0, 2}, color = {0, 0, 255, 255})
 		raiden.render(&engine.renderer)
 	}
 }

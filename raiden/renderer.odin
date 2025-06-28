@@ -1,6 +1,7 @@
 package raiden
 
 import "core:fmt"
+import "core:math/linalg"
 import "vendor:glfw"
 import "vendor:sdl3"
 import "vendor:wgpu"
@@ -64,29 +65,30 @@ Instance :: struct {
 instance_from_position_rotation :: proc(
 	position: Vec3,
 	rotation: Mat3,
+	scale: f32 = 1.0,
 	color := Color{255, 255, 255, 255},
 ) -> Instance {
-    instance := Instance {
+	instance := Instance {
 		model_matrix = Mat4(1),
 		color        = Vec4(1),
 	}
-	instance.model_matrix[0, 0] = rotation[0, 0]
+	instance.model_matrix[0, 0] = rotation[0, 0] * scale
 	instance.model_matrix[1, 0] = rotation[1, 0]
 	instance.model_matrix[2, 0] = rotation[2, 0]
 	instance.model_matrix[0, 1] = rotation[0, 1]
-	instance.model_matrix[1, 1] = rotation[1, 1]
+	instance.model_matrix[1, 1] = rotation[1, 1] * scale
 	instance.model_matrix[2, 1] = rotation[2, 1]
 	instance.model_matrix[0, 2] = rotation[0, 2]
 	instance.model_matrix[1, 2] = rotation[1, 2]
-	instance.model_matrix[2, 2] = rotation[2, 2]
-    instance_set_position(&instance, position)
+	instance.model_matrix[2, 2] = rotation[2, 2] * scale
+	instance_set_position(&instance, position)
 	instance.color = [4]f32 {
 		f32(color.r) / 255,
 		f32(color.g) / 255,
 		f32(color.b) / 255,
 		f32(color.a) / 255,
 	}
-    return instance
+	return instance
 }
 
 instance_set_position :: proc(instance: ^Instance, position: Vec3) {
