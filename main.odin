@@ -11,17 +11,11 @@ import "vendor:wgpu"
 import "vendor:wgpu/glfwglue"
 import "vendor:wgpu/sdl3glue"
 
-Camera :: struct {
-	view_matrix:  raiden.Mat4,
-	proj_matrix:  raiden.Mat4,
-	model_matrix: raiden.Mat4,
-}
-
 Engine :: struct {
 	renderer:    raiden.Renderer,
 	window:      ^sdl3.Window,
 	window_size: [2]u32,
-	camera:      Camera,
+	camera:      raiden.Camera,
 }
 
 engine_init_sdl3 :: proc(engine: ^Engine) -> bool {
@@ -33,8 +27,8 @@ engine_init_sdl3 :: proc(engine: ^Engine) -> bool {
 	glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
 	glfw.WindowHint(glfw.RESIZABLE, glfw.TRUE)
 
-	engine.window_size.x = 1280
-	engine.window_size.y = 720
+	engine.window_size.x = 1920
+	engine.window_size.y = 1080
 	engine.window = sdl3.CreateWindow(
 		"Raiden",
 		i32(engine.window_size.x),
@@ -80,26 +74,27 @@ handle_window_resize :: proc(engine: ^Engine, width, height: i32) {
 }
 
 init_matrices :: proc(engine: ^Engine) {
+	using engine.camera
 	aspect := f32(engine.window_size.x) / f32(engine.window_size.y)
+	fmt.println("Aspect: ", aspect)
 
-	engine.camera.proj_matrix = linalg.matrix4_perspective_f32(
-		math.to_radians_f32(45.0),
+	proj_matrix.data = linalg.matrix4_perspective_f32(
+		math.to_radians_f32(60.0),
 		aspect,
 		0.1,
 		100.0,
 	)
-	engine.camera.view_matrix = raiden.Mat4(1)
+	view_matrix.data = raiden.Mat4(1)
     // odinfmt: disable
-	engine.camera.model_matrix = raiden.Mat4 {
+	model_matrix.data = raiden.Mat4 {
         1, 0, 0, 0,
         0, 1, 0, 0,
         0, 0, 1, -10,
         0, 0, 0, 1,
     }
     // odinfmt: enable
-	camera := &engine.camera
 	uniforms := raiden.Uniforms {
-		view_proj = camera.proj_matrix * camera.view_matrix * camera.model_matrix,
+		view_proj = proj_matrix.data * view_matrix.data * model_matrix.data,
 	}
 	wgpu.QueueWriteBuffer(
 		engine.renderer.queue,
@@ -111,9 +106,9 @@ init_matrices :: proc(engine: ^Engine) {
 }
 
 update_matrices :: proc(engine: ^Engine) {
-	camera := &engine.camera
+	using engine.camera
 	uniforms := raiden.Uniforms {
-		view_proj = camera.proj_matrix * camera.view_matrix * camera.model_matrix,
+		view_proj = proj_matrix.data * view_matrix.data * model_matrix.data,
 	}
 	wgpu.QueueWriteBuffer(
 		engine.renderer.queue,
@@ -125,26 +120,28 @@ update_matrices :: proc(engine: ^Engine) {
 }
 
 cleanup :: proc(engine: ^Engine) {
-	if engine.renderer.vertex_buffer != nil do wgpu.BufferDestroy(engine.renderer.vertex_buffer)
-	if engine.renderer.index_buffer != nil do wgpu.BufferDestroy(engine.renderer.index_buffer)
-	if engine.renderer.uniform_buffer != nil do wgpu.BufferDestroy(engine.renderer.uniform_buffer)
-	if engine.renderer.render_pipeline != nil do wgpu.RenderPipelineRelease(engine.renderer.render_pipeline)
-	if engine.renderer.depth_view != nil do wgpu.TextureViewRelease(engine.renderer.depth_view)
-	if engine.renderer.depth_texture != nil do wgpu.TextureRelease(engine.renderer.depth_texture)
-	if engine.renderer.device != nil do wgpu.DeviceRelease(engine.renderer.device)
-	if engine.renderer.adapter != nil do wgpu.AdapterRelease(engine.renderer.adapter)
-	if engine.renderer.surface != nil do wgpu.SurfaceRelease(engine.renderer.surface)
+    using engine.renderer
+	if vertex_buffer != nil do wgpu.BufferDestroy(vertex_buffer)
+	if index_buffer != nil do wgpu.BufferDestroy(index_buffer)
+	if uniform_buffer != nil do wgpu.BufferDestroy(uniform_buffer)
+	if render_pipeline != nil do wgpu.RenderPipelineRelease(render_pipeline)
+	if depth_view != nil do wgpu.TextureViewRelease(depth_view)
+	if depth_texture != nil do wgpu.TextureRelease(depth_texture)
+	if device != nil do wgpu.DeviceRelease(device)
+	if adapter != nil do wgpu.AdapterRelease(adapter)
+	if surface != nil do wgpu.SurfaceRelease(surface)
 
 	if engine.window != nil do sdl3.DestroyWindow(engine.window)
 	glfw.Terminate()
 }
 
 MouseState :: struct {
-	is_rotating: bool,
-	angle_pitch: f32,
-	angle_yaw:   f32,
-	pos:         [2]f32,
-	rotation:    quaternion128,
+	is_rotating:    bool,
+	is_translating: bool,
+	angle_pitch:    f32,
+	angle_yaw:      f32,
+	pos:            [2]f32,
+	rotation:       quaternion128,
 }
 
 main :: proc() {
@@ -171,6 +168,13 @@ main :: proc() {
 				if sdl3.GetWindowFromID(window_event.windowID) == engine.window {
 					handle_window_resize(&engine, window_event.data1, window_event.data2)
 				}
+			case .MOUSE_WHEEL:
+				wheel_event := cast(^sdl3.MouseWheelEvent)&event
+				focal_distance := raiden.camera_get_focal_distance(&engine.camera)
+				focal_distance += wheel_event.y * 0.2
+				focal_distance = 0.001 if focal_distance <= 0.001 else focal_distance
+				raiden.camera_set_focal_distance(&engine.camera, focal_distance)
+				update_matrices(&engine)
 			case .MOUSE_BUTTON_DOWN:
 				mouse_event := cast(^sdl3.MouseButtonEvent)&event
 				if mouse_event.button == sdl3.BUTTON_LEFT {
@@ -178,10 +182,18 @@ main :: proc() {
 					mouse_state.pos.x = mouse_event.x
 					mouse_state.pos.y = mouse_event.y
 				}
+				if mouse_event.button == sdl3.BUTTON_RIGHT {
+					mouse_state.is_translating = true
+					mouse_state.pos.x = mouse_event.x
+					mouse_state.pos.y = mouse_event.y
+				}
 			case .MOUSE_BUTTON_UP:
 				mouse_event := cast(^sdl3.MouseButtonEvent)&event
 				if mouse_event.button == sdl3.BUTTON_LEFT {
 					mouse_state.is_rotating = false
+				}
+				if mouse_event.button == sdl3.BUTTON_RIGHT {
+					mouse_state.is_translating = false
 				}
 			case .MOUSE_MOTION:
 				mouse_event := cast(^sdl3.MouseMotionEvent)&event
@@ -206,7 +218,16 @@ main :: proc() {
 
 					rot := linalg.matrix4_from_quaternion_f32(mouse_state.rotation)
 					pos := linalg.matrix4_translate_f32({0, 0, -10})
-					engine.camera.model_matrix = pos * rot
+					engine.camera.model_matrix.data = pos * rot
+					update_matrices(&engine)
+				}
+				if mouse_state.is_translating {
+					delta_x := mouse_event.x - mouse_state.pos.x
+					delta_y := mouse_event.y - mouse_state.pos.y
+					pos := raiden.camera_get_position(&engine.camera)
+					pos.x += delta_x * 0.01
+					pos.y -= delta_y * 0.01
+					raiden.camera_set_position(&engine.camera, pos)
 					update_matrices(&engine)
 				}
 				mouse_state.pos.x = mouse_event.x
