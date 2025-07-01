@@ -8,8 +8,6 @@ import "vendor:wgpu"
 import "vendor:wgpu/glfwglue"
 import "vendor:wgpu/sdl3glue"
 
-DEFAULT_INSTANCE_CAPACITY :: 64
-
 // Shader source
 vert_shader_source :: #load("vert_shader.wgsl", string)
 frag_shader_source :: #load("frag_shader.wgsl", string)
@@ -23,21 +21,18 @@ Mat4 :: distinct matrix[4, 4]f32
 Color :: [4]u32
 
 Renderer :: struct {
-	adapter:           wgpu.Adapter,
-	device:            wgpu.Device,
-	queue:             wgpu.Queue,
-	surface:           wgpu.Surface,
-	surface_config:    wgpu.SurfaceConfiguration,
-	render_pipeline:   wgpu.RenderPipeline,
-	vertex_buffer:     wgpu.Buffer,
-	index_buffer:      wgpu.Buffer,
-	uniform_buffer:    wgpu.Buffer,
-	instance_buffer:   wgpu.Buffer,
-	bind_group:        wgpu.BindGroup,
-	depth_texture:     wgpu.Texture,
-	depth_view:        wgpu.TextureView,
-	commands:          DrawBatch,
-	instance_capacity: u32,
+	adapter:         wgpu.Adapter,
+	device:          wgpu.Device,
+	queue:           wgpu.Queue,
+	surface:         wgpu.Surface,
+	surface_config:  wgpu.SurfaceConfiguration,
+	render_pipeline: wgpu.RenderPipeline,
+	uniform_buffer:  wgpu.Buffer,
+	bind_group:      wgpu.BindGroup,
+	depth_texture:   wgpu.Texture,
+	depth_view:      wgpu.TextureView,
+	commands:        DrawBatch,
+	meshes:          map[MeshType]Mesh,
 }
 
 WgpuCallbackContext :: struct {
@@ -461,56 +456,11 @@ init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 }
 
 init_buffers :: proc(renderer: ^Renderer) -> bool {
-	// Create vertex buffer
-	vertices_size := uint(len(CUBE_VERTICES) * size_of(Vertex))
-	vertex_buffer_desc := wgpu.BufferDescriptor {
-		label            = "Vertex Buffer",
-		size             = u64(vertices_size),
-		usage            = wgpu.BufferUsageFlags {
-			wgpu.BufferUsage.Vertex,
-			wgpu.BufferUsage.CopyDst,
-		},
-		mappedAtCreation = false,
-	}
-	renderer.vertex_buffer = wgpu.DeviceCreateBuffer(renderer.device, &vertex_buffer_desc)
-	wgpu.QueueWriteBuffer(
-		renderer.queue,
-		renderer.vertex_buffer,
-		0,
-		raw_data(CUBE_VERTICES),
-		vertices_size,
-	)
+	renderer.meshes = make(map[MeshType]Mesh)
 
-	// Create instance buffer
-	renderer.instance_capacity = DEFAULT_INSTANCE_CAPACITY
-	instances_size := uint(renderer.instance_capacity * size_of(Instance))
-	instance_buffer_desc := wgpu.BufferDescriptor {
-		label            = "Instance Buffer",
-		size             = u64(instances_size),
-		usage            = wgpu.BufferUsageFlags {
-			wgpu.BufferUsage.Vertex,
-			wgpu.BufferUsage.CopyDst,
-		},
-		mappedAtCreation = false,
-	}
-	renderer.instance_buffer = wgpu.DeviceCreateBuffer(renderer.device, &instance_buffer_desc)
-
-	// Create index buffer
-	indices_size := uint(len(CUBE_INDICES) * size_of(u16))
-	index_buffer_desc := wgpu.BufferDescriptor {
-		label            = "Index Buffer",
-		size             = u64(indices_size),
-		usage            = wgpu.BufferUsageFlags{wgpu.BufferUsage.Index, wgpu.BufferUsage.CopyDst},
-		mappedAtCreation = false,
-	}
-	renderer.index_buffer = wgpu.DeviceCreateBuffer(renderer.device, &index_buffer_desc)
-	wgpu.QueueWriteBuffer(
-		renderer.queue,
-		renderer.index_buffer,
-		0,
-		raw_data(CUBE_INDICES),
-		indices_size,
-	)
+	renderer.meshes[.CUBE] = mesh_init_cube(renderer)
+	renderer.meshes[.TETRAHEDRON] = mesh_init_tetrahedron(renderer)
+	renderer.meshes[.TRIANGLE] = mesh_init_triangle(renderer)
 
 	// Create uniform buffer
 	uniform_buffer_desc := wgpu.BufferDescriptor {
@@ -591,10 +541,11 @@ init_commands :: proc(renderer: ^Renderer) -> bool {
 
 renderer_cleanup :: proc(renderer: ^Renderer) {
 	using renderer
-	if vertex_buffer != nil do wgpu.BufferDestroy(vertex_buffer)
-	if index_buffer != nil do wgpu.BufferDestroy(index_buffer)
+	for key, &value in meshes {
+		mesh_destroy(&value)
+	}
+	if meshes != nil do delete(meshes)
 	if uniform_buffer != nil do wgpu.BufferDestroy(uniform_buffer)
-	if instance_buffer != nil do wgpu.BufferDestroy(instance_buffer)
 	if render_pipeline != nil do wgpu.RenderPipelineRelease(render_pipeline)
 	if depth_view != nil do wgpu.TextureViewRelease(depth_view)
 	if depth_texture != nil do wgpu.TextureRelease(depth_texture)
@@ -605,19 +556,6 @@ renderer_cleanup :: proc(renderer: ^Renderer) {
 }
 
 render :: proc(renderer: ^Renderer) {
-	instance_count := uint(len(renderer.commands))
-	instances := make([dynamic]Instance, instance_count)
-	for i in 0 ..< instance_count {
-		instances[i] = renderer.commands[i].instance
-	}
-	wgpu.QueueWriteBuffer(
-		renderer.queue,
-		renderer.instance_buffer,
-		0,
-		raw_data(instances),
-		instance_count * size_of(Instance),
-	)
-
 	surface_texture := wgpu.SurfaceGetCurrentTexture(renderer.surface)
 	if surface_texture.status != wgpu.SurfaceGetCurrentTextureStatus.SuccessOptimal {
 		fmt.println("Surface texture status:", surface_texture.status)
@@ -667,36 +605,18 @@ render :: proc(renderer: ^Renderer) {
 
 	wgpu.RenderPassEncoderSetPipeline(render_pass, renderer.render_pipeline)
 	wgpu.RenderPassEncoderSetBindGroup(render_pass, 0, renderer.bind_group)
-	wgpu.RenderPassEncoderSetVertexBuffer(
-		render_pass,
-		0,
-		renderer.vertex_buffer,
-		0,
-		u64(len(CUBE_VERTICES) * size_of(Vertex)),
-	)
-	wgpu.RenderPassEncoderSetVertexBuffer(
-		render_pass,
-		1,
-		renderer.instance_buffer,
-		0,
-		u64(instance_count * size_of(Instance)),
-	)
-	wgpu.RenderPassEncoderSetIndexBuffer(
-		render_pass,
-		renderer.index_buffer,
-		wgpu.IndexFormat.Uint16,
-		0,
-		u64(len(CUBE_INDICES) * size_of(u16)),
-	)
 
-	wgpu.RenderPassEncoderDrawIndexed(
-		render_pass,
-		u32(len(CUBE_INDICES)),
-		u32(instance_count),
-		0,
-		0,
-		0,
-	)
+	// Draw
+	for mesh_type in renderer.meshes {
+		switch mesh_type {
+		case .TRIANGLE:
+			render_mesh(mesh_type, renderer, render_pass)
+		case .CUBE:
+			render_mesh(mesh_type, renderer, render_pass)
+		case .TETRAHEDRON:
+			render_mesh(mesh_type, renderer, render_pass)
+		}
+	}
 	wgpu.RenderPassEncoderEnd(render_pass)
 
 	command_buffer_desc := wgpu.CommandBufferDescriptor {
@@ -707,5 +627,73 @@ render :: proc(renderer: ^Renderer) {
 
 	wgpu.QueueSubmit(renderer.queue, {command_buffer})
 	wgpu.SurfacePresent(renderer.surface)
+
+	// Clear the command list
 	clear(&renderer.commands)
+}
+
+render_mesh :: proc(
+	mesh_type: MeshType,
+	renderer: ^Renderer,
+	render_pass: wgpu.RenderPassEncoder,
+) {
+	mesh, ok := &renderer.meshes[mesh_type]
+	if !ok {
+		fmt.println("Could not find mesh type ", mesh_type)
+	}
+	instances := make([dynamic]Instance)
+	defer delete(instances)
+	for cmd in renderer.commands {
+		if cmd.primitive_type == mesh_type {
+			append(&instances, cmd.instance)
+		}
+	}
+	instance_count := uint(len(instances))
+	// No instances.  Nothing to do.
+	if instance_count == 0 do return
+
+	if u32(instance_count) > mesh.instance_capacity {
+		mesh_realloc_instance_buffer(mesh, renderer, u32(instance_count))
+		fmt.printfln("Required: %v, New capacity: %v", instance_count, mesh.instance_capacity)
+	}
+
+	wgpu.QueueWriteBuffer(
+		renderer.queue,
+		mesh.instance_buffer,
+		0,
+		raw_data(instances),
+		instance_count * size_of(Instance),
+	)
+
+	wgpu.RenderPassEncoderSetVertexBuffer(
+		render_pass,
+		0,
+		mesh.vertex_buffer,
+		0,
+		u64(len(mesh.vertices) * size_of(Vertex)),
+	)
+	wgpu.RenderPassEncoderSetVertexBuffer(
+		render_pass,
+		1,
+		mesh.instance_buffer,
+		0,
+		u64(instance_count * size_of(Instance)),
+	)
+
+	wgpu.RenderPassEncoderSetIndexBuffer(
+		render_pass,
+		mesh.index_buffer,
+		wgpu.IndexFormat.Uint16,
+		0,
+		u64(len(mesh.indices) * size_of(u16)),
+	)
+
+	wgpu.RenderPassEncoderDrawIndexed(
+		render_pass,
+		u32(len(mesh.indices)),
+		u32(instance_count),
+		0,
+		0,
+		0,
+	)
 }

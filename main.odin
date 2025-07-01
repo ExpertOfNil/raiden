@@ -24,8 +24,8 @@ engine_init_sdl3 :: proc(engine: ^Engine) -> bool {
 		return false
 	}
 
-	engine.window_size.x = 1920
-	engine.window_size.y = 1080
+	engine.window_size.x = 1280
+	engine.window_size.y = 720
 	engine.window = sdl3.CreateWindow(
 		"Raiden",
 		i32(engine.window_size.x),
@@ -143,6 +143,11 @@ main :: proc() {
 	target := raiden.instance_from_position_rotation(raiden.Vec3(0), raiden.Mat3(1), scale = 0.2)
 
 	running := true
+    a := math.sqrt_f32(8.0 / 9.0)
+    b := -1.0 / (2.0 * math.sqrt_f32(6.0))
+    c := -math.sqrt_f32(2.0 / 9.0)
+    d := math.sqrt_f32(2.0 / 3.0)
+    e := math.sqrt_f32(3.0 / 8.0)
 	for running {
 		event: sdl3.Event
 		for sdl3.PollEvent(&event) {
@@ -197,11 +202,54 @@ main :: proc() {
 			}
 		}
 		update_uniforms(&engine)
-		raiden.instance_set_position(&target, engine.camera.target)
-		raiden.draw_cube_from_instance(&engine.renderer, target)
-		raiden.draw_cube(&engine.renderer, position = {2, 0, 0}, color = {255, 0, 0, 255})
-		raiden.draw_cube(&engine.renderer, position = {0, 2, 0}, color = {0, 255, 0, 255})
-		raiden.draw_cube(&engine.renderer, position = {0, 0, 2}, color = {0, 0, 255, 255})
+		//raiden.instance_set_position(&target, engine.camera.target)
+		//raiden.draw_cube_from_instance(&engine.renderer, target)
+
+        // Draw cubes aligned with axes
+		raiden.draw_cube(
+			&engine.renderer,
+			position = {4, 0, 0},
+			scale = 0.1,
+			color = {255, 0, 0, 255},
+		)
+		raiden.draw_cube(
+			&engine.renderer,
+			position = {0, 4, 0},
+			scale = 0.1,
+			color = {0, 255, 0, 255},
+		)
+		raiden.draw_cube(
+			&engine.renderer,
+			position = {0, 0, 4},
+			scale = 0.1,
+			color = {0, 0, 255, 255},
+		)
+
+        // Tetrahedron vertices rendered as cubes
+		raiden.draw_tetrahedron(
+			&engine.renderer,
+			position = {0.0, a, b},
+			scale = 0.2,
+			color = {0, 255, 0, 255},
+		)
+		raiden.draw_tetrahedron(
+			&engine.renderer,
+			position = {0.0, 0.0, e},
+			scale = 0.2,
+			color = {0, 0, 255, 255},
+		)
+		raiden.draw_tetrahedron(
+			&engine.renderer,
+			position = {d, c, b},
+			scale = 0.2,
+			color = {255, 0, 0, 255},
+		)
+		raiden.draw_tetrahedron(
+			&engine.renderer,
+			position = {-d, c, b},
+			scale = 0.2,
+			color = {255, 0, 255, 255},
+		)
 		raiden.render(&engine.renderer)
 	}
 }
