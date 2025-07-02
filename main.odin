@@ -1,10 +1,129 @@
 package main
 
 import "core:fmt"
+import "core:io"
+import "core:log"
 import "core:os"
+import "core:strconv"
+import "core:strings"
 import "raiden"
 
+Cloud :: struct {
+	ids:       [dynamic]string,
+	positions: [dynamic]raiden.Vec3,
+}
+
+read_cloud_csv :: proc(path: string, cloud: ^Cloud, skip_header: bool = false) -> bool {
+	file, err := os.open(path)
+	if err != nil {
+		log.error("Failed to open file:", err)
+	}
+	defer os.close(file)
+
+	buffer: [4096]u8
+	residual := ""
+	line_index := 0
+	for {
+		bytes_read, err := os.read(file, buffer[:])
+		if err != nil {
+			log.error("Error reading file contents")
+			break
+		}
+		if bytes_read == 0 {
+			// EOF
+			break
+		}
+
+		blob := strings.concatenate({residual, string(buffer[:bytes_read])})
+		lines := strings.split(blob, "\n")
+
+		if !strings.has_suffix(blob, "\n") {
+			residual = lines[len(lines) - 1]
+			lines = lines[:len(lines) - 1]
+		} else {
+			residual = ""
+		}
+
+		for line in lines {
+			defer line_index += 1
+			if line_index == 0 && skip_header {
+				continue
+			}
+
+			fields := strings.split(line, ",")
+			if len(fields) != 4 {
+				log.error("Malformed line [%v]: %v", line_index, line)
+				continue
+			}
+
+
+			append(&cloud.ids, strings.trim_space(fields[0]))
+			pos: raiden.Vec3
+			if x, ok := strconv.parse_f32(strings.trim_space(fields[1])); ok {
+				pos.x = x
+			} else {
+				log.error("Failed to parse x: %v", fields[1])
+				continue
+			}
+
+			if y, ok := strconv.parse_f32(strings.trim_space(fields[2])); ok {
+				pos.y = y
+			} else {
+				log.error("Failed to parse y: %v", fields[2])
+				continue
+			}
+
+			if z, ok := strconv.parse_f32(strings.trim_space(fields[3])); ok {
+				pos.z = z
+			} else {
+				log.error("Failed to parse z: %v", fields[3])
+				continue
+			}
+			append(&cloud.positions, pos)
+		}
+
+		if residual != "" {
+			fields := strings.split(residual, ",")
+			if len(fields) == 4 {
+				append(&cloud.ids, strings.trim_space(fields[0]))
+				pos: raiden.Vec3
+				if x, ok := strconv.parse_f32(strings.trim_space(fields[1])); ok {
+					pos.x = x
+				} else {
+					log.error("Failed to parse x: %v", fields[1])
+					continue
+				}
+
+				if y, ok := strconv.parse_f32(strings.trim_space(fields[2])); ok {
+					pos.y = y
+				} else {
+					log.error("Failed to parse y: %v", fields[2])
+					continue
+				}
+
+				if z, ok := strconv.parse_f32(strings.trim_space(fields[3])); ok {
+					pos.z = z
+				} else {
+					log.error("Failed to parse z: %v", fields[3])
+					continue
+				}
+				append(&cloud.positions, pos)
+			}
+		}
+	}
+	return true
+}
+
 main :: proc() {
+    cloud := Cloud {
+        ids = make([dynamic]string),
+        positions = make([dynamic]raiden.Vec3),
+    }
+    defer delete(cloud.ids)
+    defer delete(cloud.positions)
+    if !read_cloud_csv("test.csv", &cloud) {
+        os.exit(1)
+    }
 	engine := raiden.Engine{}
 
 	if !raiden.engine_init_sdl3(&engine) {
@@ -48,25 +167,14 @@ main :: proc() {
 			color = {0, 0, 255, 255},
 		)
 
-		// Draw tetrahedrons aligned with axes
-		raiden.draw_tetrahedron(
-			&engine.renderer,
-			position = {6, 0, 0},
-			scale = 0.2,
-			color = {255, 0, 0, 255},
-		)
-		raiden.draw_tetrahedron(
-			&engine.renderer,
-			position = {0, 6, 0},
-			scale = 0.2,
-			color = {0, 255, 0, 255},
-		)
-		raiden.draw_tetrahedron(
-			&engine.renderer,
-			position = {0, 0, 6},
-			scale = 0.2,
-			color = {0, 0, 255, 255},
-		)
+        for pt in cloud.positions {
+            raiden.draw_cube(
+                &engine.renderer,
+                position = pt,
+                scale = 0.2,
+                color = {255, 255, 0, 255},
+            )
+        }
 		raiden.render(&engine.renderer)
 	}
 }

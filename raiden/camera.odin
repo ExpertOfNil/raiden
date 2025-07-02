@@ -83,8 +83,8 @@ pan_orbit_camera_init :: proc(camera: ^PanOrbitCamera, target: Vec3, distance: f
 	camera.distance = distance
 	camera.angle_yaw = pi_2 / 2
 	camera.angle_pitch = pi_2 / 2
-	camera.distance_min = 1.0
-	camera.distance_max = 100.0
+	camera.distance_min = 0.1
+	camera.distance_max = 1000.0
 	camera.angle_pitch_min = -pi_2 + 0.01
 	camera.angle_pitch_max = pi_2 - 0.01
 	camera.mouse_speed = 0.005

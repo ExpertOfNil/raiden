@@ -76,7 +76,7 @@ init_matrices :: proc(engine: ^Engine) {
 		math.to_radians_f32(60.0),
 		aspect,
 		0.1,
-		100.0,
+		1000.0,
 	)
 	view_matrix.data = Mat4(1)
 	uniforms := Uniforms {

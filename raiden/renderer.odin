@@ -592,7 +592,7 @@ render :: proc(renderer: ^Renderer) {
 			loadOp = .Clear,
 			storeOp = .Store,
 			depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
-			clearValue = {0.1, 0.1, 0.1, 1.0},
+			clearValue = {0.01, 0.01, 0.01, 1.0},
 		},
 		depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment {
 			view = renderer.depth_view,
