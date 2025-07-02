@@ -1,6 +1,7 @@
 package raiden
 
 import "core:fmt"
+import "core:log"
 import "core:math/linalg"
 import "vendor:glfw"
 import "vendor:sdl3"
@@ -556,9 +557,17 @@ renderer_cleanup :: proc(renderer: ^Renderer) {
 }
 
 render :: proc(renderer: ^Renderer) {
+	// Clear the command list.
+	// This must be done before returning to prevent accumulation of draw commands.
+	defer clear(&renderer.commands)
+
 	surface_texture := wgpu.SurfaceGetCurrentTexture(renderer.surface)
 	if surface_texture.status != wgpu.SurfaceGetCurrentTextureStatus.SuccessOptimal {
-		fmt.println("Surface texture status:", surface_texture.status)
+		if surface_texture.status == .Outdated {
+			log.debug("Surface texture status:", surface_texture.status)
+		} else {
+			log.warn("Surface texture status:", surface_texture.status)
+		}
 		return
 	}
 	defer wgpu.TextureRelease(surface_texture.texture)
@@ -627,9 +636,6 @@ render :: proc(renderer: ^Renderer) {
 
 	wgpu.QueueSubmit(renderer.queue, {command_buffer})
 	wgpu.SurfacePresent(renderer.surface)
-
-	// Clear the command list
-	clear(&renderer.commands)
 }
 
 render_mesh :: proc(
@@ -653,8 +659,19 @@ render_mesh :: proc(
 	if instance_count == 0 do return
 
 	if u32(instance_count) > mesh.instance_capacity {
+		log.debugf(
+			"Instance count: [%v]%v, capacity: %v",
+			len(renderer.commands),
+			u32(instance_count),
+			mesh.instance_capacity,
+		)
 		mesh_realloc_instance_buffer(mesh, renderer, u32(instance_count))
-		fmt.printfln("Required: %v, New capacity: %v", instance_count, mesh.instance_capacity)
+		fmt.printfln(
+			"[%v] required: %v, new capacity: %v",
+			mesh_type,
+			instance_count,
+			mesh.instance_capacity,
+		)
 	}
 
 	wgpu.QueueWriteBuffer(

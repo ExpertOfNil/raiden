@@ -22,7 +22,7 @@ read_cloud_csv :: proc(path: string, cloud: ^Cloud, skip_header: bool = false) -
 
 	buffer: [4096]u8
 	residual := ""
-	line_index := 0
+	line_index := 1
 	for {
 		bytes_read, err := os.read(file, buffer[:])
 		if err != nil {
@@ -46,84 +46,71 @@ read_cloud_csv :: proc(path: string, cloud: ^Cloud, skip_header: bool = false) -
 
 		for line in lines {
 			defer line_index += 1
-			if line_index == 0 && skip_header {
-				continue
-			}
+			if line_index == 0 && skip_header do continue
+			if line == "" do continue
 
 			fields := strings.split(line, ",")
 			if len(fields) != 4 {
-				log.error("Malformed line [%v]: %v", line_index, line)
+				log.errorf("Malformed line [%v] with fields: %v", line_index, fields)
+				log.errorf("lines: \n%v", lines)
 				continue
 			}
 
-
-			append(&cloud.ids, strings.trim_space(fields[0]))
-			pos: raiden.Vec3
-			if x, ok := strconv.parse_f32(strings.trim_space(fields[1])); ok {
-				pos.x = x
-			} else {
-				log.error("Failed to parse x: %v", fields[1])
+			if !deserialize_cloud_point(cloud, &fields) {
 				continue
 			}
-
-			if y, ok := strconv.parse_f32(strings.trim_space(fields[2])); ok {
-				pos.y = y
-			} else {
-				log.error("Failed to parse y: %v", fields[2])
-				continue
-			}
-
-			if z, ok := strconv.parse_f32(strings.trim_space(fields[3])); ok {
-				pos.z = z
-			} else {
-				log.error("Failed to parse z: %v", fields[3])
-				continue
-			}
-			append(&cloud.positions, pos)
 		}
 
 		if residual != "" {
 			fields := strings.split(residual, ",")
 			if len(fields) == 4 {
-				append(&cloud.ids, strings.trim_space(fields[0]))
-				pos: raiden.Vec3
-				if x, ok := strconv.parse_f32(strings.trim_space(fields[1])); ok {
-					pos.x = x
-				} else {
-					log.error("Failed to parse x: %v", fields[1])
+				if !deserialize_cloud_point(cloud, &fields) {
 					continue
 				}
-
-				if y, ok := strconv.parse_f32(strings.trim_space(fields[2])); ok {
-					pos.y = y
-				} else {
-					log.error("Failed to parse y: %v", fields[2])
-					continue
-				}
-
-				if z, ok := strconv.parse_f32(strings.trim_space(fields[3])); ok {
-					pos.z = z
-				} else {
-					log.error("Failed to parse z: %v", fields[3])
-					continue
-				}
-				append(&cloud.positions, pos)
 			}
 		}
 	}
 	return true
 }
 
+deserialize_cloud_point :: proc(cloud: ^Cloud, fields: ^[]string) -> bool {
+	append(&cloud.ids, strings.trim_space(fields[0]))
+	pos: raiden.Vec3
+	if x, ok := strconv.parse_f32(strings.trim_space(fields[1])); ok {
+		pos.x = x
+	} else {
+		log.errorf("Failed to parse x: %v", fields[1])
+		return false
+	}
+
+	if y, ok := strconv.parse_f32(strings.trim_space(fields[2])); ok {
+		pos.y = y
+	} else {
+		log.errorf("Failed to parse y: %v", fields[2])
+		return false
+	}
+
+	if z, ok := strconv.parse_f32(strings.trim_space(fields[3])); ok {
+		pos.z = z
+	} else {
+		log.errorf("Failed to parse z: %v", fields[3])
+		return false
+	}
+	append(&cloud.positions, pos)
+	return true
+}
+
 main :: proc() {
-    cloud := Cloud {
-        ids = make([dynamic]string),
-        positions = make([dynamic]raiden.Vec3),
-    }
-    defer delete(cloud.ids)
-    defer delete(cloud.positions)
-    if !read_cloud_csv("test.csv", &cloud) {
-        os.exit(1)
-    }
+	context.logger = log.create_console_logger(.Debug)
+	cloud := Cloud {
+		ids       = make([dynamic]string),
+		positions = make([dynamic]raiden.Vec3),
+	}
+	defer delete(cloud.ids)
+	defer delete(cloud.positions)
+	if !read_cloud_csv("test.csv", &cloud) {
+		os.exit(1)
+	}
 	engine := raiden.Engine{}
 
 	if !raiden.engine_init_sdl3(&engine) {
@@ -167,14 +154,14 @@ main :: proc() {
 			color = {0, 0, 255, 255},
 		)
 
-        for pt in cloud.positions {
-            raiden.draw_cube(
-                &engine.renderer,
-                position = pt,
-                scale = 0.2,
-                color = {255, 255, 0, 255},
-            )
-        }
+		for pt in cloud.positions {
+			raiden.draw_cube(
+				&engine.renderer,
+				position = pt,
+				scale = 0.2,
+				color = {255, 255, 0, 255},
+			)
+		}
 		raiden.render(&engine.renderer)
 	}
 }

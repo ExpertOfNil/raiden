@@ -1,10 +1,10 @@
 package raiden
 
-import "vendor:sdl3"
-import "vendor:wgpu"
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
+import "vendor:sdl3"
+import "vendor:wgpu"
 
 Engine :: struct {
 	renderer:    Renderer,
@@ -64,6 +64,15 @@ handle_window_resize :: proc(engine: ^Engine, width, height: i32) {
 	engine.renderer.surface_config.height = engine.window_size.y
 	wgpu.SurfaceConfigure(engine.renderer.surface, &engine.renderer.surface_config)
 	init_depth_texture(&engine.renderer, engine.window_size)
+
+	// Update projection matrix
+	aspect := f32(engine.window_size.x) / f32(engine.window_size.y)
+	engine.camera.proj_matrix.data = linalg.matrix4_perspective_f32(
+		fovy = math.to_radians_f32(60.0),
+		aspect = aspect,
+		near = 0.1,
+		far = 1000.0,
+	)
 	update_uniforms(engine)
 }
 
@@ -109,7 +118,7 @@ cleanup :: proc(engine: ^Engine) {
 	renderer_cleanup(&engine.renderer)
 
 	if engine.window != nil do sdl3.DestroyWindow(engine.window)
-    sdl3.Quit()
+	sdl3.Quit()
 }
 
 MouseState :: struct {
@@ -126,6 +135,11 @@ handle_sdl3_events :: proc(engine: ^Engine, mouse_state: ^MouseState) -> bool {
 		case .QUIT:
 			return false
 		case .WINDOW_RESIZED:
+			window_event := cast(^sdl3.WindowEvent)&event
+			if sdl3.GetWindowFromID(window_event.windowID) == engine.window {
+				handle_window_resize(engine, window_event.data1, window_event.data2)
+			}
+		case .WINDOW_PIXEL_SIZE_CHANGED:
 			window_event := cast(^sdl3.WindowEvent)&event
 			if sdl3.GetWindowFromID(window_event.windowID) == engine.window {
 				handle_window_resize(engine, window_event.data1, window_event.data2)
@@ -172,6 +186,6 @@ handle_sdl3_events :: proc(engine: ^Engine, mouse_state: ^MouseState) -> bool {
 			mouse_state.position.y = mouse_event.y
 		}
 	}
-    update_uniforms(engine)
-    return true;
+	update_uniforms(engine)
+	return true
 }
