@@ -8,6 +8,8 @@ import "core:strconv"
 import "core:strings"
 import "raiden"
 
+LOG_LEVEL :: #config(LOG_LEVEL, 10)
+
 Cloud :: struct {
 	ids:       [dynamic]string,
 	positions: [dynamic]raiden.Vec3,
@@ -101,7 +103,19 @@ deserialize_cloud_point :: proc(cloud: ^Cloud, fields: ^[]string) -> bool {
 }
 
 main :: proc() {
-	context.logger = log.create_console_logger(.Debug)
+    // Logging setup
+    log_level: log.Level
+    switch LOG_LEVEL {
+        case 0: log_level = .Debug
+        case 1: log_level = .Info
+        case 2: log_level = .Warning
+        case 3: log_level = .Error
+        case 4: log_level = .Fatal
+        case: log_level = .Info
+    }
+	context.logger = log.create_console_logger(log_level)
+
+    // Create point cloud from file
 	cloud := Cloud {
 		ids       = make([dynamic]string),
 		positions = make([dynamic]raiden.Vec3),
@@ -113,8 +127,9 @@ main :: proc() {
 	}
 	engine := raiden.Engine{}
 
+    // Initialize graphics engine
 	if !raiden.engine_init_sdl3(&engine) {
-		fmt.eprintln("Failed to initialize engine")
+		log.error("Failed to initialize engine")
 		os.exit(1)
 	}
 	defer raiden.cleanup(&engine)

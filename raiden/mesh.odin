@@ -1,6 +1,7 @@
 package raiden
 
 import "core:fmt"
+import "core:log"
 import "core:math"
 import "core:math/linalg"
 import "vendor:wgpu"
@@ -35,7 +36,7 @@ mesh_destroy :: proc(mesh: ^Mesh) {
 mesh_create_buffers :: proc(mesh: ^Mesh, renderer: ^Renderer, n_vertices: int, n_indices: int) {
 	// Create vertex buffer
 	vertices_size := uint(n_vertices * size_of(Vertex))
-	fmt.printfln("Cube vertices size: %v", vertices_size)
+	log.debugf("Cube vertices size: %v", vertices_size)
 	vertex_buffer_desc := wgpu.BufferDescriptor {
 		label            = "Cube Vertex Buffer",
 		size             = u64(vertices_size),
@@ -56,7 +57,7 @@ mesh_create_buffers :: proc(mesh: ^Mesh, renderer: ^Renderer, n_vertices: int, n
 
 	// Create index buffer
 	indices_size := uint(n_indices * size_of(u16))
-	fmt.printfln("Cube indices size: %v", indices_size)
+	log.debugf("Cube indices size: %v", indices_size)
 	index_buffer_desc := wgpu.BufferDescriptor {
 		label            = "Cube Index Buffer",
 		size             = u64(indices_size),
@@ -75,7 +76,7 @@ mesh_create_buffers :: proc(mesh: ^Mesh, renderer: ^Renderer, n_vertices: int, n
 	// Create instance buffer
 	mesh.instance_capacity = DEFAULT_INSTANCE_CAPACITY
 	instances_size := uint(mesh.instance_capacity * size_of(Instance))
-	fmt.printfln("Cube instance size: %v", instances_size)
+	log.debugf("Cube instance size: %v", instances_size)
 	instance_buffer_desc := wgpu.BufferDescriptor {
 		label            = "Cube Instance Buffer",
 		size             = u64(instances_size),
@@ -94,7 +95,7 @@ mesh_realloc_instance_buffer :: proc(mesh: ^Mesh, renderer: ^Renderer, new_capac
         mesh.instance_capacity *= 2
     }
 	instances_size := uint(mesh.instance_capacity * size_of(Instance))
-	fmt.printfln("Mesh instance size: %v", instances_size)
+	log.debugf("Mesh instance size: %v", instances_size)
 	instance_buffer_desc := wgpu.BufferDescriptor {
 		label            = "Cube Instance Buffer",
 		size             = u64(instances_size),

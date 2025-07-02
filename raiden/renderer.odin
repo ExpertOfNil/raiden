@@ -107,10 +107,7 @@ adapter_request_callback :: proc "c" (
 		ctx.success = true
 	} else {
 		context = {}
-		fmt.eprintln(
-			"Adapter request failed: %s",
-			message if len(message) != 0 else "Unknown Error",
-		)
+		log.errorf("Adapter request failed: %s", message if len(message) != 0 else "Unknown Error")
 		ctx.success = false
 	}
 }
@@ -129,10 +126,7 @@ device_request_callback :: proc "c" (
 		ctx.success = true
 	} else {
 		context = {}
-		fmt.eprintln(
-			"Device request failed: %s",
-			message if len(message) != 0 else "Unknown Error",
-		)
+		log.errorf("Device request failed: %s", message if len(message) != 0 else "Unknown Error")
 		ctx.success = false
 	}
 }
@@ -140,16 +134,16 @@ device_request_callback :: proc "c" (
 init_wgpu_sdl3 :: proc(renderer: ^Renderer, window: ^sdl3.Window, window_size: [2]u32) -> bool {
 	instance := wgpu.CreateInstance(nil)
 	if instance == nil {
-		fmt.eprintln("Failed to create WGPU instance")
+		log.error("Failed to create WGPU instance")
 		return false
 	}
 
 	renderer.surface = sdl3glue.GetSurface(instance, window)
 	if renderer.surface == nil {
-		fmt.eprintln("Failed to create surface")
+		log.error("Failed to create surface")
 		return false
 	}
-	fmt.println("Surface created:", renderer.surface != nil)
+	log.debug("Surface created:", renderer.surface != nil)
 
 	adapter_options := wgpu.RequestAdapterOptions {
 		compatibleSurface = renderer.surface,
@@ -169,22 +163,22 @@ init_wgpu_sdl3 :: proc(renderer: ^Renderer, window: ^sdl3.Window, window_size: [
 	}
 
 	if !wgpu_ctx.success {
-		fmt.eprintln("Failed to get adapter")
+		log.error("Failed to get adapter")
 		return false
 	}
-	fmt.println("Adapter created:", renderer.adapter != nil)
+	log.debug("Adapter created:", renderer.adapter != nil)
 
 	surface_caps, status := wgpu.SurfaceGetCapabilities(renderer.surface, renderer.adapter)
 	if status != .Success {
-		fmt.eprintln("Failed to get surface capabilities")
+		log.error("Failed to get surface capabilities")
 		return false
 	}
 
 	if surface_caps.formatCount == 0 {
-		fmt.eprintln("No supported surface formats")
+		log.error("No supported surface formats")
 		return false
 	}
-	fmt.println("Surface format count:", surface_caps.formatCount)
+	log.debug("Surface format count:", surface_caps.formatCount)
 
 	// Reset completion status for device
 	wgpu_ctx.completed = false
@@ -204,10 +198,10 @@ init_wgpu_sdl3 :: proc(renderer: ^Renderer, window: ^sdl3.Window, window_size: [
 	}
 
 	if !wgpu_ctx.completed {
-		fmt.eprintln("Failed to get device")
+		log.error("Failed to get device")
 		return false
 	}
-	fmt.println("Device created:", renderer.device != nil)
+	log.debug("Device created:", renderer.device != nil)
 	renderer.queue = wgpu.DeviceGetQueue(renderer.device)
 
 	renderer.surface_config = wgpu.SurfaceConfiguration {
@@ -221,7 +215,7 @@ init_wgpu_sdl3 :: proc(renderer: ^Renderer, window: ^sdl3.Window, window_size: [
 	wgpu.SurfaceConfigure(renderer.surface, &renderer.surface_config)
 
 	if !init_depth_texture(renderer, window_size) {
-		fmt.eprintln("Failed to create depth texture")
+		log.error("Failed to create depth texture")
 		return false
 	}
 
@@ -235,16 +229,16 @@ init_wgpu_glfw :: proc(
 ) -> bool {
 	instance := wgpu.CreateInstance(nil)
 	if instance == nil {
-		fmt.eprintln("Failed to create WGPU instance")
+		log.error("Failed to create WGPU instance")
 		return false
 	}
 
 	renderer.surface = glfwglue.GetSurface(instance, window)
 	if renderer.surface == nil {
-		fmt.eprintln("Failed to create surface")
+		log.error("Failed to create surface")
 		return false
 	}
-	fmt.println("Surface created:", renderer.surface != nil)
+	log.debug("Surface created:", renderer.surface != nil)
 
 	adapter_options := wgpu.RequestAdapterOptions {
 		compatibleSurface = renderer.surface,
@@ -264,22 +258,22 @@ init_wgpu_glfw :: proc(
 	}
 
 	if !wgpu_ctx.success {
-		fmt.eprintln("Failed to get adapter")
+		log.error("Failed to get adapter")
 		return false
 	}
-	fmt.println("Adapter created:", renderer.adapter != nil)
+	log.debug("Adapter created:", renderer.adapter != nil)
 
 	surface_caps, status := wgpu.SurfaceGetCapabilities(renderer.surface, renderer.adapter)
 	if status != .Success {
-		fmt.eprintln("Failed to get surface capabilities")
+		log.error("Failed to get surface capabilities")
 		return false
 	}
 
 	if surface_caps.formatCount == 0 {
-		fmt.eprintln("No supported surface formats")
+		log.error("No supported surface formats")
 		return false
 	}
-	fmt.println("Surface format count:", surface_caps.formatCount)
+	log.debug("Surface format count:", surface_caps.formatCount)
 
 	// Reset completion status for device
 	wgpu_ctx.completed = false
@@ -299,10 +293,10 @@ init_wgpu_glfw :: proc(
 	}
 
 	if !wgpu_ctx.completed {
-		fmt.eprintln("Failed to get device")
+		log.error("Failed to get device")
 		return false
 	}
-	fmt.println("Device created:", renderer.device != nil)
+	log.debug("Device created:", renderer.device != nil)
 	renderer.queue = wgpu.DeviceGetQueue(renderer.device)
 
 	renderer.surface_config = wgpu.SurfaceConfiguration {
@@ -316,7 +310,7 @@ init_wgpu_glfw :: proc(
 	wgpu.SurfaceConfigure(renderer.surface, &renderer.surface_config)
 
 	if !init_depth_texture(renderer, window_size) {
-		fmt.eprintln("Failed to create depth texture")
+		log.error("Failed to create depth texture")
 		return false
 	}
 
@@ -325,7 +319,7 @@ init_wgpu_glfw :: proc(
 
 init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 	if !init_commands(renderer) {
-		fmt.eprintln("Failed to initialize commands")
+		log.error("Failed to initialize commands")
 		return false
 	}
 	vert_shader_desc := wgpu.ShaderModuleDescriptor {
@@ -334,7 +328,7 @@ init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 	}
 	vert_shader := wgpu.DeviceCreateShaderModule(renderer.device, &vert_shader_desc)
 	if vert_shader == nil {
-		fmt.eprintln("Failed to create vertex shader")
+		log.error("Failed to create vertex shader")
 		return false
 	}
 
@@ -344,7 +338,7 @@ init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 	}
 	frag_shader := wgpu.DeviceCreateShaderModule(renderer.device, &frag_shader_desc)
 	if frag_shader == nil {
-		fmt.eprintln("Failed to create fragment shader")
+		log.error("Failed to create fragment shader")
 		return false
 	}
 
@@ -449,10 +443,10 @@ init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 
 	renderer.render_pipeline = wgpu.DeviceCreateRenderPipeline(renderer.device, &pipeline_desc)
 	if renderer.render_pipeline == nil {
-		fmt.eprintln("Failed to create render pipeline")
+		log.error("Failed to create render pipeline")
 		return false
 	}
-	fmt.println("Render pipeline created")
+	log.debug("Render pipeline created")
 	return true
 }
 
@@ -513,7 +507,7 @@ init_depth_texture :: proc(renderer: ^Renderer, window_size: [2]u32) -> bool {
 	}
 	renderer.depth_texture = wgpu.DeviceCreateTexture(renderer.device, &depth_texture_desc)
 	if renderer.depth_texture == nil {
-		fmt.eprintln("Failed to crate depth texture")
+		log.error("Failed to crate depth texture")
 		return false
 	}
 
@@ -528,7 +522,7 @@ init_depth_texture :: proc(renderer: ^Renderer, window_size: [2]u32) -> bool {
 	}
 	renderer.depth_view = wgpu.TextureCreateView(renderer.depth_texture, &depth_view_desc)
 	if renderer.depth_view == nil {
-		fmt.eprintln("Failed to crate depth view")
+		log.error("Failed to crate depth view")
 		return false
 	}
 
@@ -583,7 +577,7 @@ render :: proc(renderer: ^Renderer) {
 	}
 	view := wgpu.TextureCreateView(surface_texture.texture, &view_desc)
 	if view == nil {
-		fmt.eprintln("Failed to create texture view")
+		log.error("Failed to create texture view")
 	}
 	defer wgpu.TextureViewRelease(view)
 
@@ -645,7 +639,7 @@ render_mesh :: proc(
 ) {
 	mesh, ok := &renderer.meshes[mesh_type]
 	if !ok {
-		fmt.println("Could not find mesh type ", mesh_type)
+		log.warn("Could not find mesh type ", mesh_type)
 	}
 	instances := make([dynamic]Instance)
 	defer delete(instances)
@@ -666,7 +660,7 @@ render_mesh :: proc(
 			mesh.instance_capacity,
 		)
 		mesh_realloc_instance_buffer(mesh, renderer, u32(instance_count))
-		fmt.printfln(
+		log.debugf(
 			"[%v] required: %v, new capacity: %v",
 			mesh_type,
 			instance_count,

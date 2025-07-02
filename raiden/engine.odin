@@ -1,6 +1,7 @@
 package raiden
 
 import "core:fmt"
+import "core:log"
 import "core:math"
 import "core:math/linalg"
 import "vendor:sdl3"
@@ -15,7 +16,7 @@ Engine :: struct {
 
 engine_init_sdl3 :: proc(engine: ^Engine) -> bool {
 	if !sdl3.Init({.VIDEO}) {
-		fmt.eprintln("Failed to initialize SDL3")
+		log.error("Failed to initialize SDL3")
 		return false
 	}
 
@@ -29,23 +30,23 @@ engine_init_sdl3 :: proc(engine: ^Engine) -> bool {
 	)
 
 	if engine.window == nil {
-		fmt.eprintln("Failed to create window")
+		log.error("Failed to create window")
 		sdl3.Quit()
 		return false
 	}
 
 	if !init_wgpu_sdl3(&engine.renderer, engine.window, engine.window_size) {
-		fmt.eprintln("Failed to initialize WGPU")
+		log.error("Failed to initialize WGPU")
 		sdl3.Quit()
 		return false
 	}
 	if !init_render_pipeline(&engine.renderer) {
-		fmt.eprintln("Failed to initialize render pipeline")
+		log.error("Failed to initialize render pipeline")
 		sdl3.Quit()
 		return false
 	}
 	if !init_buffers(&engine.renderer) {
-		fmt.eprintln("Failed to initialize buffers")
+		log.error("Failed to initialize buffers")
 		sdl3.Quit()
 		return false
 	}
@@ -79,7 +80,7 @@ handle_window_resize :: proc(engine: ^Engine, width, height: i32) {
 init_matrices :: proc(engine: ^Engine) {
 	using engine.camera
 	aspect := f32(engine.window_size.x) / f32(engine.window_size.y)
-	fmt.println("Aspect: ", aspect)
+	log.debug("Aspect: ", aspect)
 
 	proj_matrix.data = linalg.matrix4_perspective_f32(
 		math.to_radians_f32(60.0),
