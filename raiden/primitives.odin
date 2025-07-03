@@ -33,3 +33,22 @@ CUBE_INDICES :: []u16 {
     7, 2, 3,
 }
 // odinfmt: enable
+
+// odinfmt: disable
+CUBE_EDGES :: []u16 {
+    0, 1,
+    1, 3,
+    3, 2,
+    2, 0,
+
+    4, 5,
+    5, 7,
+    7, 6,
+    6, 4,
+
+    0, 4,
+    1, 5,
+    2, 6,
+    3, 7,
+}
+// odinfmt: enable

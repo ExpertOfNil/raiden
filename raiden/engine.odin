@@ -44,6 +44,11 @@ engine_init_sdl3 :: proc(engine: ^Engine) -> bool {
 		sdl3.Quit()
 		return false
 	}
+	if !init_outline_pipeline(&engine.renderer) {
+		fmt.eprintln("Failed to initialize render pipeline")
+		sdl3.Quit()
+		return false
+	}
 	if !init_buffers(&engine.renderer) {
 		fmt.eprintln("Failed to initialize buffers")
 		sdl3.Quit()

@@ -126,13 +126,13 @@ main :: proc() {
 	}
 
 	// Make a cube to visualize the camera target location
-	target := raiden.instance_from_position_rotation(raiden.Vec3(0), raiden.Mat3(1), scale = 0.2)
+	target := raiden.instance_from_position_rotation(raiden.Vec3(0), raiden.Mat3(1), scale = 0.05)
 
 	running := true
 	for running {
 		running = raiden.handle_sdl3_events(&engine, &mouse_state)
 		raiden.instance_set_position(&target, engine.camera.target)
-		raiden.draw_cube_from_instance(&engine.renderer, target)
+		raiden.draw_sphere_from_instance(&engine.renderer, target)
 
 		// Draw cubes aligned with axes
 		raiden.draw_cube(
@@ -147,15 +147,15 @@ main :: proc() {
 			scale = 0.1,
 			color = {0, 255, 0, 255},
 		)
-		raiden.draw_cube(
+		raiden.draw_tetrahedron(
 			&engine.renderer,
 			position = {0, 0, 4},
-			scale = 0.1,
+			scale = 0.2,
 			color = {0, 0, 255, 255},
 		)
 
 		for pt in cloud.positions {
-			raiden.draw_cube(
+			raiden.draw_sphere(
 				&engine.renderer,
 				position = pt,
 				scale = 0.2,
