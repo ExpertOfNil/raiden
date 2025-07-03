@@ -22,18 +22,19 @@ Mat4 :: distinct matrix[4, 4]f32
 Color :: [4]u32
 
 Renderer :: struct {
-	adapter:         wgpu.Adapter,
-	device:          wgpu.Device,
-	queue:           wgpu.Queue,
-	surface:         wgpu.Surface,
-	surface_config:  wgpu.SurfaceConfiguration,
-	render_pipeline: wgpu.RenderPipeline,
-	uniform_buffer:  wgpu.Buffer,
-	bind_group:      wgpu.BindGroup,
-	depth_texture:   wgpu.Texture,
-	depth_view:      wgpu.TextureView,
-	commands:        DrawBatch,
-	meshes:          map[MeshType]Mesh,
+	adapter:          wgpu.Adapter,
+	device:           wgpu.Device,
+	queue:            wgpu.Queue,
+	surface:          wgpu.Surface,
+	surface_config:   wgpu.SurfaceConfiguration,
+	render_pipeline:  wgpu.RenderPipeline,
+	outline_pipeline: wgpu.RenderPipeline,
+	uniform_buffer:   wgpu.Buffer,
+	bind_group:       wgpu.BindGroup,
+	depth_texture:    wgpu.Texture,
+	depth_view:       wgpu.TextureView,
+	commands:         DrawBatch,
+	meshes:           map[MeshType]Mesh,
 }
 
 WgpuCallbackContext :: struct {
@@ -456,6 +457,7 @@ init_buffers :: proc(renderer: ^Renderer) -> bool {
 	renderer.meshes[.CUBE] = mesh_init_cube(renderer)
 	renderer.meshes[.TETRAHEDRON] = mesh_init_tetrahedron(renderer)
 	renderer.meshes[.TRIANGLE] = mesh_init_triangle(renderer)
+	renderer.meshes[.SPHERE] = mesh_init_sphere_uv(renderer, 10)
 
 	// Create uniform buffer
 	uniform_buffer_desc := wgpu.BufferDescriptor {
@@ -542,6 +544,7 @@ renderer_cleanup :: proc(renderer: ^Renderer) {
 	if meshes != nil do delete(meshes)
 	if uniform_buffer != nil do wgpu.BufferDestroy(uniform_buffer)
 	if render_pipeline != nil do wgpu.RenderPipelineRelease(render_pipeline)
+	if outline_pipeline != nil do wgpu.RenderPipelineRelease(outline_pipeline)
 	if depth_view != nil do wgpu.TextureViewRelease(depth_view)
 	if depth_texture != nil do wgpu.TextureRelease(depth_texture)
 	if device != nil do wgpu.DeviceRelease(device)
@@ -587,12 +590,30 @@ render :: proc(renderer: ^Renderer) {
 	command_encoder := wgpu.DeviceCreateCommandEncoder(renderer.device, &command_encoder_desc)
 	defer wgpu.CommandEncoderRelease(command_encoder)
 
+    solid_render_pass(renderer, view, command_encoder)
+    outline_render_pass(renderer, view, command_encoder)
+
+	command_buffer_desc := wgpu.CommandBufferDescriptor {
+		label = "Command Buffer",
+	}
+	command_buffer := wgpu.CommandEncoderFinish(command_encoder, &command_buffer_desc)
+	defer wgpu.CommandBufferRelease(command_buffer)
+
+	wgpu.QueueSubmit(renderer.queue, {command_buffer})
+	wgpu.SurfacePresent(renderer.surface)
+}
+
+solid_render_pass :: proc(
+	renderer: ^Renderer,
+	view: wgpu.TextureView,
+	command_encoder: wgpu.CommandEncoder,
+) {
 	render_pass_desc := wgpu.RenderPassDescriptor {
 		label                  = "Render Pass",
 		colorAttachmentCount   = 1,
 		colorAttachments       = &wgpu.RenderPassColorAttachment {
 			view = view,
-			loadOp = .Clear,
+			loadOp = .Load,
 			storeOp = .Store,
 			depthSlice = wgpu.DEPTH_SLICE_UNDEFINED,
 			clearValue = {0.01, 0.01, 0.01, 1.0},
@@ -618,18 +639,11 @@ render :: proc(renderer: ^Renderer) {
 			render_mesh(mesh_type, renderer, render_pass)
 		case .TETRAHEDRON:
 			render_mesh(mesh_type, renderer, render_pass)
+		case .SPHERE:
+			render_mesh(mesh_type, renderer, render_pass)
 		}
 	}
 	wgpu.RenderPassEncoderEnd(render_pass)
-
-	command_buffer_desc := wgpu.CommandBufferDescriptor {
-		label = "Command Buffer",
-	}
-	command_buffer := wgpu.CommandEncoderFinish(command_encoder, &command_buffer_desc)
-	defer wgpu.CommandBufferRelease(command_buffer)
-
-	wgpu.QueueSubmit(renderer.queue, {command_buffer})
-	wgpu.SurfacePresent(renderer.surface)
 }
 
 render_mesh :: proc(

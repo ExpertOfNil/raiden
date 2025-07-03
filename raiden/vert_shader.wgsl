@@ -26,7 +26,7 @@ struct VertexOutput {
 var<uniform> uniforms: Uniforms;
 
 @vertex
-fn vs_main(@builtin(vertex_index) vidx: u32, input: VertexInput, instance: Instance) -> VertexOutput {
+fn vs_main(input: VertexInput, instance: Instance) -> VertexOutput {
     let model_matrix = mat4x4<f32>(
         instance.model_matrix_x,
         instance.model_matrix_y,

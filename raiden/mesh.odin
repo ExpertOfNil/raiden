@@ -12,15 +12,20 @@ MeshType :: enum {
 	TRIANGLE,
 	CUBE,
 	TETRAHEDRON,
+	SPHERE,
 }
 
 Mesh :: struct {
-	vertices:          [dynamic]Vertex,
-	indices:           [dynamic]u16,
-	vertex_buffer:     wgpu.Buffer,
-	index_buffer:      wgpu.Buffer,
-	instance_buffer:   wgpu.Buffer,
-	instance_capacity: u32,
+	vertices:               [dynamic]Vertex,
+	indices:                [dynamic]u16,
+	edge_indices:           [dynamic]u16,
+	vertex_buffer:          wgpu.Buffer,
+	index_buffer:           wgpu.Buffer,
+	instance_buffer:        wgpu.Buffer,
+	instance_capacity:      u32,
+	edge_instance_buffer:   wgpu.Buffer,
+	edge_instance_capacity: u32,
+	edge_buffer:            wgpu.Buffer,
 }
 
 mesh_destroy :: proc(mesh: ^Mesh) {
@@ -28,12 +33,21 @@ mesh_destroy :: proc(mesh: ^Mesh) {
 	if vertex_buffer != nil do wgpu.BufferDestroy(vertex_buffer)
 	if index_buffer != nil do wgpu.BufferDestroy(index_buffer)
 	if instance_buffer != nil do wgpu.BufferDestroy(instance_buffer)
+	if edge_instance_buffer != nil do wgpu.BufferDestroy(edge_instance_buffer)
+	if edge_buffer != nil do wgpu.BufferDestroy(edge_buffer)
 
 	if vertices != nil do delete(vertices)
 	if indices != nil do delete(indices)
+	if edge_indices != nil do delete(edge_indices)
 }
 
-mesh_create_buffers :: proc(mesh: ^Mesh, renderer: ^Renderer, n_vertices: int, n_indices: int) {
+mesh_create_buffers :: proc(
+	mesh: ^Mesh,
+	renderer: ^Renderer,
+	n_vertices: int,
+	n_indices: int,
+	n_edge_indices: int,
+) {
 	// Create vertex buffer
 	vertices_size := uint(n_vertices * size_of(Vertex))
 	log.debugf("Cube vertices size: %v", vertices_size)
@@ -87,13 +101,49 @@ mesh_create_buffers :: proc(mesh: ^Mesh, renderer: ^Renderer, n_vertices: int, n
 		mappedAtCreation = false,
 	}
 	mesh.instance_buffer = wgpu.DeviceCreateBuffer(renderer.device, &instance_buffer_desc)
+
+	// Create edge index buffer
+	edge_indices_size := uint(n_edge_indices * size_of(u16))
+	fmt.printfln("Sphere edge indices size: %v", edge_indices_size)
+	edge_index_buffer_desc := wgpu.BufferDescriptor {
+		label            = "Sphere Edge Index Buffer",
+		size             = u64(edge_indices_size),
+		usage            = wgpu.BufferUsageFlags{wgpu.BufferUsage.Index, wgpu.BufferUsage.CopyDst},
+		mappedAtCreation = false,
+	}
+	mesh.edge_buffer = wgpu.DeviceCreateBuffer(renderer.device, &edge_index_buffer_desc)
+	wgpu.QueueWriteBuffer(
+		renderer.queue,
+		mesh.edge_buffer,
+		0,
+		raw_data(mesh.edge_indices),
+		edge_indices_size,
+	)
+
+	// Create edge instance buffer
+	mesh.edge_instance_capacity = DEFAULT_INSTANCE_CAPACITY
+	edge_instances_size := uint(mesh.edge_instance_capacity * size_of(Instance))
+	fmt.printfln("Sphere instance size: %v", instances_size)
+	edge_instance_buffer_desc := wgpu.BufferDescriptor {
+		label            = "Sphere Edge Instance Buffer",
+		size             = u64(edge_instances_size),
+		usage            = wgpu.BufferUsageFlags {
+			wgpu.BufferUsage.Vertex,
+			wgpu.BufferUsage.CopyDst,
+		},
+		mappedAtCreation = false,
+	}
+	mesh.edge_instance_buffer = wgpu.DeviceCreateBuffer(
+		renderer.device,
+		&edge_instance_buffer_desc,
+	)
 }
 
 mesh_realloc_instance_buffer :: proc(mesh: ^Mesh, renderer: ^Renderer, new_capacity: u32) {
 	// Create new instance buffer
-    for mesh.instance_capacity < new_capacity {
-        mesh.instance_capacity *= 2
-    }
+	for mesh.instance_capacity < new_capacity {
+		mesh.instance_capacity *= 2
+	}
 	instances_size := uint(mesh.instance_capacity * size_of(Instance))
 	log.debugf("Mesh instance size: %v", instances_size)
 	instance_buffer_desc := wgpu.BufferDescriptor {
@@ -112,9 +162,11 @@ mesh_realloc_instance_buffer :: proc(mesh: ^Mesh, renderer: ^Renderer, new_capac
 mesh_init_cube :: proc(renderer: ^Renderer) -> Mesh {
 	n_vertices := len(CUBE_VERTICES)
 	n_indices := len(CUBE_INDICES)
+	n_edge_indices := len(CUBE_EDGES)
 	mesh := Mesh {
-		vertices = make([dynamic]Vertex, n_vertices),
-		indices  = make([dynamic]u16, n_indices),
+		vertices     = make([dynamic]Vertex, n_vertices),
+		indices      = make([dynamic]u16, n_indices),
+		edge_indices = make([dynamic]u16, n_indices),
 	}
 	for &v, i in CUBE_VERTICES {
 		mesh.vertices[i] = v
@@ -122,8 +174,11 @@ mesh_init_cube :: proc(renderer: ^Renderer) -> Mesh {
 	for &idx, i in CUBE_INDICES {
 		mesh.indices[i] = idx
 	}
+	for &idx, i in CUBE_EDGES {
+		mesh.edge_indices[i] = idx
+	}
 
-	mesh_create_buffers(&mesh, renderer, n_vertices, n_indices)
+	mesh_create_buffers(&mesh, renderer, n_vertices, n_indices, n_edge_indices)
 	return mesh
 }
 
@@ -134,9 +189,24 @@ align_buffer_size :: proc(size: uint, alignment: uint = 4) -> uint {
 mesh_init_triangle :: proc(renderer: ^Renderer) -> Mesh {
 	n_vertices :: 3
 	n_indices :: 4
+
+    // odinfmt: disable
+	edge_indices: []u16 = {
+        0, 1,
+        1, 2,
+        2, 0,
+    }
+    // odinfmt: enable
+	n_edge_indices := len(edge_indices)
+
 	mesh := Mesh {
-		vertices = make([dynamic]Vertex, n_vertices),
-		indices  = make([dynamic]u16, n_indices),
+		vertices     = make([dynamic]Vertex, n_vertices),
+		indices      = make([dynamic]u16, n_indices),
+		edge_indices = make([dynamic]u16, n_edge_indices),
+	}
+
+	for idx, i in edge_indices {
+		mesh.edge_indices[i] = idx
 	}
 
 	mesh.vertices[0].position = Vec3{0.0, 1.0, 0.0}
@@ -159,16 +229,33 @@ mesh_init_triangle :: proc(renderer: ^Renderer) -> Mesh {
 	mesh.vertices[1].normal = n
 	mesh.vertices[2].normal = n
 
-	mesh_create_buffers(&mesh, renderer, n_vertices, n_indices)
+	mesh_create_buffers(&mesh, renderer, n_vertices, n_indices, n_edge_indices)
 	return mesh
 }
 
 mesh_init_tetrahedron :: proc(renderer: ^Renderer) -> Mesh {
 	n_vertices :: 4
 	n_indices :: 12
+
+    // odinfmt: disable
+	edge_indices: []u16 = {
+        0, 1,
+        1, 2,
+        2, 0,
+        0, 3,
+        1, 3,
+        2, 3,
+    }
+    // odinfmt: enable
+	n_edge_indices := len(edge_indices)
 	mesh := Mesh {
-		vertices = make([dynamic]Vertex, n_vertices),
-		indices  = make([dynamic]u16, n_indices),
+		vertices     = make([dynamic]Vertex, n_vertices),
+		indices      = make([dynamic]u16, n_indices),
+		edge_indices = make([dynamic]u16, n_edge_indices),
+	}
+
+	for idx, i in edge_indices {
+		mesh.edge_indices[i] = idx
 	}
 
 	a := math.sqrt_f32(8.0 / 9.0)
@@ -218,98 +305,57 @@ mesh_init_tetrahedron :: proc(renderer: ^Renderer) -> Mesh {
 		mesh.vertices[v].normal = linalg.normalize(v_norm)
 	}
 
-	mesh_create_buffers(&mesh, renderer, n_vertices, n_indices)
+	mesh_create_buffers(&mesh, renderer, n_vertices, n_indices, n_edge_indices)
 	return mesh
 }
 
-/*
-mesh_init_sphere_uv :: proc(divisions: u32) -> Mesh {
-	n := 2 * divisions * divisions + 2
-	mesh := Mesh {
-		vertices = make([dynamic]Vertex, n),
-		indices  = make([dynamic]u16, n),
-	}
-
-	vidx := 0
-
-	// Top pole
-	vertex := &mesh.vertices[vidx]
-	vertex.position = Vec3{0, 0, 1}
-	vertex.normal = linalg.normalize(vertex.position)
-	vertex.color = Vec3(1)
-
-    // Middle
-	ds: f32 = 360.0 / f32(n)
-	for i in 1 ..= n {
-		phi := f32(i) * ds
-		for j in 0 ..< n {
-			theta := f32(j) * ds
-			vidx += 1
-			vertex = &mesh.vertices[vidx]
-			vertex.position = Vec3 {
-				math.sin(theta) * math.cos(phi),
-				math.sin(theta) * math.sin(phi),
-				math.cos(theta),
-			}
-			vertex.normal = linalg.normalize(vertex.position)
-			vertex.color = Vec3(1)
-		}
-	}
-
-    // Bottom pole
-    vidx += 1
-	vertex = &mesh.vertices[vidx]
-	vertex.position = Vec3{0, 0, -1}
-	vertex.normal = linalg.normalize(vertex.position)
-	vertex.color = Vec3(1)
-
-	// Top cap
-	for j in 0 ..< longitude {
-		next := (j + 1) % longitude
-		indices = append(indices, top_index, 1 + j, 1 + next)
-	}
-
-}
-
-generate_uv_sphere :: proc(radius: f32, divisions: int) -> MeshData {
+mesh_init_sphere_uv :: proc(renderer: ^Renderer, divisions: u32) -> Mesh {
+	using linalg
 	longitude := 2 * divisions
 	latitude := divisions
 
-	vertex_count := 2 + (latitude - 1) * longitude
-	index_count := 6 * longitude * (latitude - 1) // 2 tris per quad
+	n_vertices := int(2 + (latitude - 1) * longitude)
+	// 2 tris per quad
+	n_indices := int(6 * longitude * (latitude - 1))
+	n_edge_indices := int(
+		2 * longitude * ((latitude - 1) + longitude + (latitude - 2)),
+	)
 
-	positions := make([]Vec3, vertex_count)
-	normals := make([]Vec3, vertex_count)
-	indices := make([]u32, 0, index_count)
+	vertices := make([dynamic]Vertex, n_vertices)
+	indices := make([dynamic]u16, 0, n_indices)
+	edge_indices := make([dynamic]u16, 0, n_edge_indices)
 
 	idx := 0
+	vertex := &vertices[idx]
 
 	// Top pole
-	positions[idx] = Vec3{0, radius, 0}
-	normals[idx] = normalize(positions[idx])
+	vertex.position = Vec3{0, 1, 0}
+	vertex.normal = normalize(vertex.position)
 	top_index := idx
 	idx += 1
 
 	// Rings (excluding poles)
 	for i in 1 ..< latitude {
 		phi := f32(i) * f32(PI) / f32(latitude) // [0, π]
-		y := radius * cos(phi)
-		r := radius * sin(phi)
+		y := cos(phi)
+		r := sin(phi)
 
 		for j in 0 ..< longitude {
 			theta := f32(j) * 2.0 * f32(PI) / f32(longitude) // [0, 2π)
 			x := r * cos(theta)
 			z := r * sin(theta)
 
-			positions[idx] = Vec3{x, y, z}
-			normals[idx] = normalize(positions[idx])
+			vertex = &vertices[idx]
+			vertex.position = Vec3{x, y, z}
+			vertex.normal = normalize(vertex.position)
 			idx += 1
 		}
 	}
 
 	// Bottom pole
-	positions[idx] = Vec3{0, -radius, 0}
-	normals[idx] = normalize(positions[idx])
+	vertex = &vertices[idx]
+	vertex.position = Vec3{0, -1, 0}
+	vertex.normal = normalize(vertex.position)
 	bottom_index := idx
 
 	// === Indices ===
@@ -317,7 +363,7 @@ generate_uv_sphere :: proc(radius: f32, divisions: int) -> MeshData {
 	// Top cap
 	for j in 0 ..< longitude {
 		next := (j + 1) % longitude
-		indices = append(indices, top_index, 1 + j, 1 + next)
+		append(&indices, u16(top_index), u16(1 + next), u16(1 + j))
 	}
 
 	// Middle quads
@@ -328,13 +374,13 @@ generate_uv_sphere :: proc(radius: f32, divisions: int) -> MeshData {
 		for j in 0 ..< longitude {
 			next := (j + 1) % longitude
 
-			a := row + j
-			b := row + next
-			c := next_row + j
-			d := next_row + next
+			a := u16(row + j)
+			b := u16(row + next)
+			c := u16(next_row + j)
+			d := u16(next_row + next)
 
-			indices = append(indices, a, c, b)
-			indices = append(indices, b, c, d)
+			append(&indices, a, b, c)
+			append(&indices, b, d, c)
 		}
 	}
 
@@ -342,9 +388,40 @@ generate_uv_sphere :: proc(radius: f32, divisions: int) -> MeshData {
 	base := 1 + (latitude - 2) * longitude
 	for j in 0 ..< longitude {
 		next := (j + 1) % longitude
-		indices = append(indices, base + j, bottom_index, base + next)
+		append(&indices, u16(base + j), u16(base + next), u16(bottom_index))
 	}
 
-	return MeshData{positions = positions, normals = normals, indices = indices}
+	// === Edge Indices ===
+	for j in 0 ..< longitude {
+		// Top pole to first ring
+		append(&edge_indices, u16(top_index), u16(1 + j))
+
+		// Connect rings vertically
+		for i in 0 ..< (latitude - 2) {
+			current_ring := 1 + i * longitude
+			next_ring := current_ring + longitude
+			append(&edge_indices, u16(current_ring + j), u16(next_ring + j))
+		}
+
+		// Last ring to bottom pole
+		last_ring := 1 + (latitude - 2) * longitude
+		append(&edge_indices, u16(last_ring + j), u16(bottom_index))
+	}
+
+	// Latitude rings (horizontal circles)
+	for i in 1 ..< latitude {
+		ring_start := 1 + (i - 1) * longitude
+		for j in 0 ..< longitude {
+			next := (j + 1) % longitude
+			append(&edge_indices, u16(ring_start + j), u16(ring_start + next))
+		}
+	}
+
+	mesh := Mesh {
+		vertices     = vertices,
+		indices      = indices,
+		edge_indices = edge_indices,
+	}
+	mesh_create_buffers(&mesh, renderer, n_vertices, n_indices, n_edge_indices)
+	return mesh
 }
-*/
