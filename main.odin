@@ -8,7 +8,7 @@ import "core:strconv"
 import "core:strings"
 import "raiden"
 
-LOG_LEVEL :: #config(LOG_LEVEL, 10)
+LOG_LEVEL :: #config(LOG_LEVEL, 1)
 
 Cloud :: struct {
 	ids:       [dynamic]string,
@@ -128,7 +128,8 @@ main :: proc() {
 	engine := raiden.Engine{}
 
     // Initialize graphics engine
-	if !raiden.engine_init_sdl3(&engine) {
+	//if !raiden.engine_init_offscreen(&engine, {1920, 1080}) {
+	if !raiden.engine_init_sdl3(&engine, {1920, 1080}) {
 		log.error("Failed to initialize engine")
 		os.exit(1)
 	}
@@ -177,6 +178,9 @@ main :: proc() {
 				color = {255, 255, 0, 255},
 			)
 		}
-		raiden.render(&engine.renderer)
+        raiden.engine_render(&engine)
+        if engine.renderer.offscreen {
+            os.exit(0)
+        }
 	}
 }

@@ -14,14 +14,45 @@ Engine :: struct {
 	camera:      PanOrbitCamera,
 }
 
-engine_init_sdl3 :: proc(engine: ^Engine) -> bool {
+engine_init_offscreen :: proc(engine: ^Engine, window_size: [2]u32) -> bool {
+	engine.window = nil
+	engine.window_size = window_size
+    engine.renderer.offscreen = true
+	if !init_wgpu_offscreen(&engine.renderer, engine.window_size) {
+		log.error("Failed to initialize WGPU")
+		sdl3.Quit()
+		return false
+	}
+	if !init_render_pipeline(&engine.renderer) {
+		log.error("Failed to initialize render pipeline")
+		sdl3.Quit()
+		return false
+	}
+	if !init_outline_pipeline(&engine.renderer) {
+		fmt.eprintln("Failed to initialize render pipeline")
+		sdl3.Quit()
+		return false
+	}
+	if !init_buffers(&engine.renderer) {
+		log.error("Failed to initialize buffers")
+		sdl3.Quit()
+		return false
+	}
+
+	init_matrices(engine)
+
+	pan_orbit_camera_init(&engine.camera, Vec3(0), 10)
+	update_uniforms(engine)
+	return true
+}
+
+engine_init_sdl3 :: proc(engine: ^Engine, window_size: [2]u32) -> bool {
 	if !sdl3.Init({.VIDEO}) {
 		log.error("Failed to initialize SDL3")
 		return false
 	}
 
-	engine.window_size.x = 1280
-	engine.window_size.y = 720
+	engine.window_size = window_size
 	engine.window = sdl3.CreateWindow(
 		"Raiden",
 		i32(engine.window_size.x),
@@ -194,4 +225,12 @@ handle_sdl3_events :: proc(engine: ^Engine, mouse_state: ^MouseState) -> bool {
 	}
 	update_uniforms(engine)
 	return true
+}
+
+engine_render :: proc(engine: ^Engine) {
+    if engine.renderer.offscreen {
+        render_offscreen(&engine.renderer, engine.window_size)
+    } else {
+        render(&engine.renderer)
+    }
 }

@@ -104,7 +104,7 @@ mesh_create_buffers :: proc(
 
 	// Create edge index buffer
 	edge_indices_size := uint(n_edge_indices * size_of(u16))
-	fmt.printfln("Sphere edge indices size: %v", edge_indices_size)
+	log.debugf("Sphere edge indices size: %v", edge_indices_size)
 	edge_index_buffer_desc := wgpu.BufferDescriptor {
 		label            = "Sphere Edge Index Buffer",
 		size             = u64(edge_indices_size),
@@ -123,7 +123,7 @@ mesh_create_buffers :: proc(
 	// Create edge instance buffer
 	mesh.edge_instance_capacity = DEFAULT_INSTANCE_CAPACITY
 	edge_instances_size := uint(mesh.edge_instance_capacity * size_of(Instance))
-	fmt.printfln("Sphere instance size: %v", instances_size)
+	log.debugf("Sphere instance size: %v", instances_size)
 	edge_instance_buffer_desc := wgpu.BufferDescriptor {
 		label            = "Sphere Edge Instance Buffer",
 		size             = u64(edge_instances_size),

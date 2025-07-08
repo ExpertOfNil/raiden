@@ -1,8 +1,13 @@
 package raiden
 
+import "core:bytes"
 import "core:fmt"
+import "core:image"
+import "core:image/bmp"
 import "core:log"
 import "core:math/linalg"
+import "core:os"
+import "core:time"
 import "vendor:glfw"
 import "vendor:sdl3"
 import "vendor:wgpu"
@@ -22,15 +27,33 @@ Mat4 :: distinct matrix[4, 4]f32
 Color :: [4]u32
 
 Renderer :: struct {
-	adapter:          wgpu.Adapter,
+	adapter:           wgpu.Adapter,
+	device:            wgpu.Device,
+	queue:             wgpu.Queue,
+	surface:           wgpu.Surface,
+	surface_config:    wgpu.SurfaceConfiguration,
+	render_pipeline:   wgpu.RenderPipeline,
+	outline_pipeline:  wgpu.RenderPipeline,
+	uniform_buffer:    wgpu.Buffer,
+	bind_group:        wgpu.BindGroup,
+	offscreen_texture: wgpu.Texture,
+	offscreen_view:    wgpu.TextureView,
+	depth_texture:     wgpu.Texture,
+	depth_view:        wgpu.TextureView,
+	commands:          DrawBatch,
+	meshes:            map[MeshType]Mesh,
+	offscreen:         bool,
+}
+
+OffscreenRenderer :: struct {
 	device:           wgpu.Device,
 	queue:            wgpu.Queue,
-	surface:          wgpu.Surface,
-	surface_config:   wgpu.SurfaceConfiguration,
 	render_pipeline:  wgpu.RenderPipeline,
 	outline_pipeline: wgpu.RenderPipeline,
 	uniform_buffer:   wgpu.Buffer,
 	bind_group:       wgpu.BindGroup,
+	texture:          wgpu.Texture,
+	view:             wgpu.TextureView,
 	depth_texture:    wgpu.Texture,
 	depth_view:       wgpu.TextureView,
 	commands:         DrawBatch,
@@ -42,6 +65,12 @@ WgpuCallbackContext :: struct {
 	device:    ^wgpu.Device,
 	completed: bool,
 	success:   bool,
+}
+
+WgpuBufferMapContext :: struct {
+	status:    wgpu.MapAsyncStatus,
+	completed: bool,
+	message:   string,
 }
 
 Uniforms :: struct {
@@ -130,6 +159,100 @@ device_request_callback :: proc "c" (
 		log.errorf("Device request failed: %s", message if len(message) != 0 else "Unknown Error")
 		ctx.success = false
 	}
+}
+
+buffer_map_callback :: proc "c" (
+	status: wgpu.MapAsyncStatus,
+	message: wgpu.StringView,
+	userdata1: rawptr,
+	userdata2: rawptr,
+) {
+	if userdata1 != nil {
+		ctx := cast(^WgpuBufferMapContext)userdata1
+		ctx.completed = true
+		ctx.status = status
+		ctx.message = message if len(message) != 0 else ""
+		if status != .Success {
+			context = {}
+			log.errorf(
+				"Adapter request failed: %s",
+				message if len(message) != 0 else "Unknown Error",
+			)
+		}
+	}
+}
+
+init_wgpu_offscreen :: proc(renderer: ^Renderer, window_size: [2]u32) -> bool {
+	instance := wgpu.CreateInstance(nil)
+	if instance == nil {
+		log.error("Failed to create WGPU instance")
+		return false
+	}
+
+	// We don't need a surface for offscreen rendering
+	renderer.surface = nil
+
+	adapter_options := wgpu.RequestAdapterOptions {
+		compatibleSurface = nil,
+		powerPreference   = wgpu.PowerPreference.HighPerformance,
+	}
+	wgpu_ctx := WgpuCallbackContext {
+		adapter = &renderer.adapter,
+		device  = &renderer.device,
+	}
+	adapter_callback := wgpu.RequestAdapterCallbackInfo {
+		callback  = adapter_request_callback,
+		userdata1 = &wgpu_ctx,
+	}
+	wgpu.InstanceRequestAdapter(instance, &adapter_options, adapter_callback)
+	for !wgpu_ctx.completed {
+		wgpu.InstanceProcessEvents(instance)
+	}
+
+	if !wgpu_ctx.success {
+		log.error("Failed to get adapter")
+		return false
+	}
+	log.debug("Adapter created:", renderer.adapter != nil)
+
+	// Reset completion status for device
+	wgpu_ctx.completed = false
+	wgpu_ctx.success = false
+	device_desc := wgpu.DeviceDescriptor {
+		label = "Device",
+	}
+
+	device_callback := wgpu.RequestDeviceCallbackInfo {
+		callback  = device_request_callback,
+		userdata1 = &wgpu_ctx,
+	}
+	wgpu.AdapterRequestDevice(renderer.adapter, &device_desc, device_callback)
+
+	for !wgpu_ctx.completed {
+		wgpu.InstanceProcessEvents(instance)
+	}
+
+	if !wgpu_ctx.completed {
+		log.error("Failed to get device")
+		return false
+	}
+	log.debug("Device created:", renderer.device != nil)
+	renderer.queue = wgpu.DeviceGetQueue(renderer.device)
+
+	// Create render texture
+	if !init_offscreen_texture(renderer, window_size) {
+		log.error("Failed to create offscreen texture")
+		return false
+	}
+
+	// Create depth texture
+	if !init_depth_texture(renderer, window_size) {
+		log.error("Failed to create depth texture")
+		return false
+	}
+
+	log.debug("WGPU initialized")
+	return true
 }
 
 init_wgpu_sdl3 :: proc(renderer: ^Renderer, window: ^sdl3.Window, window_size: [2]u32) -> bool {
@@ -398,6 +521,9 @@ init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 		},
 	}
 
+	texture_format :=
+		wgpu.TextureFormat.RGBA8Unorm if renderer.offscreen else renderer.surface_config.format
+	log.debug("Texture format: ", texture_format)
 	pipeline_desc := wgpu.RenderPipelineDescriptor {
 		label = "Render Pipeline",
 		layout = pipeline_layout,
@@ -412,7 +538,7 @@ init_render_pipeline :: proc(renderer: ^Renderer) -> bool {
 			entryPoint = "fs_main",
 			targetCount = 1,
 			targets = &wgpu.ColorTargetState {
-				format = renderer.surface_config.format,
+				format = texture_format,
 				blend = &wgpu.BlendState {
 					color = {
 						operation = wgpu.BlendOperation.Add,
@@ -490,6 +616,51 @@ init_buffers :: proc(renderer: ^Renderer) -> bool {
 	return true
 }
 
+init_offscreen_texture :: proc(renderer: ^Renderer, window_size: [2]u32) -> bool {
+	if renderer.offscreen_view != nil {
+		wgpu.TextureViewRelease(renderer.offscreen_view)
+	}
+	if renderer.offscreen_texture != nil {
+		wgpu.TextureRelease(renderer.offscreen_texture)
+	}
+
+	texture_desc := wgpu.TextureDescriptor {
+		label = "Offscreen Texture",
+		size = {width = window_size.x, height = window_size.y, depthOrArrayLayers = 1},
+		mipLevelCount = 1,
+		sampleCount = 1,
+		dimension = wgpu.TextureDimension._2D,
+		format = wgpu.TextureFormat.RGBA8Unorm,
+		usage = wgpu.TextureUsageFlags{.RenderAttachment, .TextureBinding, .CopySrc},
+	}
+	renderer.offscreen_texture = wgpu.DeviceCreateTexture(renderer.device, &texture_desc)
+	if renderer.offscreen_texture == nil {
+		log.error("Failed to crate offscreen texture")
+		return false
+	}
+
+	offscreen_view_desc := wgpu.TextureViewDescriptor {
+		label           = "Offscreen View",
+		format          = wgpu.TextureFormat.RGBA8Unorm,
+		dimension       = wgpu.TextureViewDimension._2D,
+		baseMipLevel    = 0,
+		mipLevelCount   = 1,
+		baseArrayLayer  = 0,
+		arrayLayerCount = 1,
+		aspect          = .All,
+	}
+	renderer.offscreen_view = wgpu.TextureCreateView(
+		renderer.offscreen_texture,
+		&offscreen_view_desc,
+	)
+	if renderer.offscreen_view == nil {
+		log.error("Failed to crate depth view")
+		return false
+	}
+
+	return true
+}
+
 init_depth_texture :: proc(renderer: ^Renderer, window_size: [2]u32) -> bool {
 	if renderer.depth_view != nil {
 		wgpu.TextureViewRelease(renderer.depth_view)
@@ -547,10 +718,118 @@ renderer_cleanup :: proc(renderer: ^Renderer) {
 	if outline_pipeline != nil do wgpu.RenderPipelineRelease(outline_pipeline)
 	if depth_view != nil do wgpu.TextureViewRelease(depth_view)
 	if depth_texture != nil do wgpu.TextureRelease(depth_texture)
+	if offscreen_view != nil do wgpu.TextureViewRelease(offscreen_view)
+	if offscreen_texture != nil do wgpu.TextureRelease(offscreen_texture)
 	if device != nil do wgpu.DeviceRelease(device)
 	if adapter != nil do wgpu.AdapterRelease(adapter)
 	if surface != nil do wgpu.SurfaceRelease(surface)
 	if commands != nil do delete(commands)
+}
+
+render_offscreen :: proc(renderer: ^Renderer, window_size: [2]u32) {
+	// Clear the command list.
+	// This must be done before returning to prevent accumulation of draw commands.
+	defer clear(&renderer.commands)
+
+	command_encoder_desc := wgpu.CommandEncoderDescriptor {
+		label = "Command Encoder",
+	}
+	command_encoder := wgpu.DeviceCreateCommandEncoder(renderer.device, &command_encoder_desc)
+	defer wgpu.CommandEncoderRelease(command_encoder)
+
+	// Render passes
+	solid_render_pass(renderer, renderer.offscreen_view, command_encoder)
+	outline_render_pass(renderer, renderer.offscreen_view, command_encoder)
+
+	// Transfer texture to CPU
+	bytes_per_row := 4 * window_size.x
+	buffer_size := bytes_per_row * window_size.y
+
+	buffer_desc := wgpu.BufferDescriptor {
+		size             = u64(buffer_size),
+		usage            = wgpu.BufferUsageFlags{.CopyDst, .MapRead},
+		mappedAtCreation = false,
+	}
+	staging_buffer := wgpu.DeviceCreateBuffer(renderer.device, &buffer_desc)
+	if staging_buffer == nil {
+		log.error("Failed to create staging buffer")
+		return
+	}
+	defer wgpu.BufferRelease(staging_buffer)
+
+	texel_texture_info := wgpu.TexelCopyTextureInfo {
+		texture  = renderer.offscreen_texture,
+		mipLevel = 0,
+		origin   = {0, 0, 0},
+		aspect   = .All,
+	}
+
+	texel_buffer_info := wgpu.TexelCopyBufferInfo {
+		buffer = staging_buffer,
+		layout = wgpu.TexelCopyBufferLayout {
+			offset = 0,
+			bytesPerRow = bytes_per_row,
+			rowsPerImage = window_size.y,
+		},
+	}
+
+	copy_size := wgpu.Extent3D {
+		width              = window_size.x,
+		height             = window_size.y,
+		depthOrArrayLayers = 1,
+	}
+
+	wgpu.CommandEncoderCopyTextureToBuffer(
+		command_encoder,
+		&texel_texture_info,
+		&texel_buffer_info,
+		&copy_size,
+	)
+
+	command_buffer_desc := wgpu.CommandBufferDescriptor {
+		label = "Command Buffer",
+	}
+	command_buffer := wgpu.CommandEncoderFinish(command_encoder, &command_buffer_desc)
+	defer wgpu.CommandBufferRelease(command_buffer)
+
+	wgpu.QueueSubmit(renderer.queue, {command_buffer})
+
+	buffer_map_context := WgpuBufferMapContext {
+		completed = false,
+		status    = .Unknown,
+		message   = "",
+	}
+	callback_info := wgpu.BufferMapCallbackInfo {
+		mode      = .WaitAnyOnly,
+		callback  = buffer_map_callback,
+		userdata1 = &buffer_map_context,
+	}
+
+	wgpu.BufferMapAsync(staging_buffer, {.Read}, 0, uint(buffer_size), callback_info)
+	timeout := 1000
+	for !buffer_map_context.completed && timeout > 0 {
+		wgpu.DevicePoll(renderer.device, false)
+		time.sleep(time.Millisecond)
+		timeout -= 1
+	}
+
+	mapped_data := wgpu.BufferGetMappedRange(staging_buffer, 0, uint(buffer_size))
+	wgpu.BufferUnmap(staging_buffer)
+
+	image_buffer: bytes.Buffer
+	bytes.buffer_init(&image_buffer, mapped_data)
+	defer bytes.buffer_destroy(&image_buffer)
+	img := bmp.Image {
+		width    = int(window_size.x),
+		height   = int(window_size.y),
+		channels = 4,
+		depth    = 8,
+		pixels   = image_buffer,
+	}
+	if err := bmp.save_to_file("test.bmp", &img); err != nil {
+		log.error("Failed to save image to file: ", err)
+		return
+	}
 }
 
 render :: proc(renderer: ^Renderer) {
@@ -560,11 +839,14 @@ render :: proc(renderer: ^Renderer) {
 
 	surface_texture := wgpu.SurfaceGetCurrentTexture(renderer.surface)
 	if surface_texture.status != wgpu.SurfaceGetCurrentTextureStatus.SuccessOptimal {
-		if surface_texture.status == .Outdated {
-			log.debug("Surface texture status:", surface_texture.status)
-		} else {
-			log.warn("Surface texture status:", surface_texture.status)
-		}
+		log.debug("Surface texture status:", surface_texture.status)
+		if surface_texture.texture != nil do wgpu.TextureRelease(surface_texture.texture)
+		// Reconfigure surface and regenerate depth texture
+		wgpu.SurfaceConfigure(renderer.surface, &renderer.surface_config)
+		init_depth_texture(
+			renderer,
+			{renderer.surface_config.width, renderer.surface_config.height},
+		)
 		return
 	}
 	defer wgpu.TextureRelease(surface_texture.texture)
@@ -590,8 +872,8 @@ render :: proc(renderer: ^Renderer) {
 	command_encoder := wgpu.DeviceCreateCommandEncoder(renderer.device, &command_encoder_desc)
 	defer wgpu.CommandEncoderRelease(command_encoder)
 
-    solid_render_pass(renderer, view, command_encoder)
-    outline_render_pass(renderer, view, command_encoder)
+	solid_render_pass(renderer, view, command_encoder)
+	outline_render_pass(renderer, view, command_encoder)
 
 	command_buffer_desc := wgpu.CommandBufferDescriptor {
 		label = "Command Buffer",
